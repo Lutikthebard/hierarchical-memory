@@ -15,7 +15,7 @@
  *   GATEWAY_TOKEN=... (if auth enabled)
  */
 
-const { OpenClawClient } = require('./gateway-client');
+const { createLLMAdapterFromEnv } = require('./llm-adapter');
 const {
   loadStore,
   saveStore,
@@ -23,17 +23,10 @@ const {
   checkThreshold,
   getThresholdForLevel,
   formatTimestamp,
-  loadConfig,
   loadAgentConfig
 } = require('./store');
-
-// Configuration
-const GATEWAY_URL = process.env.GATEWAY_URL ?? 'ws://127.0.0.1:18789';
-const GATEWAY_TOKEN = process.env.GATEWAY_TOKEN ?? '';
-const TIMEOUT_SECONDS = parseInt(process.env.TRIGGER_TIMEOUT_SEC, 10) || 300; // 5 minutes
-
-// Global client
-let client = null;
+let llmAdapter = null;
+let adapterMode = 'openclaw';
 
 /**
  * Create L1 summarization prompt
@@ -46,19 +39,20 @@ function createL1Prompt(messages, agentConfig = null) {
   
   // Get custom prompt or use default
   const customPrompt = agentConfig?.prompts?.l1 || '';
-  const promptInstructions = customPrompt || 
-    'Focus on: key decisions, important information, context worth remembering.';
+  const promptInstructions = customPrompt ||
+    'Summarize messages into a concise memory artifact. Focus on: decisions made, problems solved, key insights, action items. Use markdown headers for structure. Be concise but complete.';
   
-  return `🧠 MEMORY TASK: Create L1 Summary
+  return `🧠 MEMORY TASK: This is a system message.
 
-Summarize ${messages.length} messages from: ${startFormatted} → ${endFormatted}
+Summarize ${messages.length} messages from: ${startFormatted} → ${endFormatted}.
 
 ${promptInstructions}
 
-**Wrap your entire response in <memory_artifact>...</memory_artifact> tags.**
-Reply with ONLY the summary inside the tags. No JSON, no extra formatting.
+Your answer to this message will be stored as a summary.
 
-After the closing </memory_artifact> tag, add a single line containing only: NO_REPLY`;
+Wrap your entire response in <memory_artifact>...</memory_artifact> tags.
+  Reply with ONLY the summary inside the tags.
+  Add NO_REPLY at the end of the message.`;
 }
 
 /**
@@ -75,21 +69,22 @@ function createAggregationPrompt(artifacts, sourceLevel, targetLevel, agentConfi
   // Get custom prompt or use default, replace {level} placeholder
   let customPrompt = agentConfig?.prompts?.aggregate || '';
   customPrompt = customPrompt.replace('{level}', sourceLevel);
-  const promptInstructions = customPrompt || 
-    'Combine into a higher-level summary. Focus on patterns, themes, key information.';
+  const promptInstructions = customPrompt ||
+    `Create a concise higher-level memory artifact from L${sourceLevel} summaries. Focus on: recurring themes, major decisions, unresolved issues, durable insights. Use markdown headers for structure. Be concise but complete.`;
   
-  return `🧠 MEMORY TASK: Create L${targetLevel} Summary
+  return `🧠 MEMORY TASK: This is a system message.
 
-Aggregate ${artifacts.length} L${sourceLevel} summaries (${startFormatted} → ${endFormatted}):
+Aggregate ${artifacts.length} L${sourceLevel} summaries into L${targetLevel} for: ${startFormatted} → ${endFormatted}.
 
 ${artifactsText}
 
 ${promptInstructions}
 
-**Wrap your entire response in <memory_artifact>...</memory_artifact> tags.**
-Reply with ONLY the summary inside the tags. No JSON, no extra formatting.
+Your answer to this message will be stored as a summary.
 
-After the closing </memory_artifact> tag, add a single line containing only: NO_REPLY`;
+Wrap your entire response in <memory_artifact>...</memory_artifact> tags.
+  Reply with ONLY the summary inside the tags.
+  Add NO_REPLY at the end of the message.`;
 }
 
 /**
@@ -119,33 +114,21 @@ function parseAgentResponse(text) {
   return text.trim();
 }
 
-/**
- * Connect to Gateway
- */
-async function connectGateway() {
-  // Always close old connection and create new one
-  if (client) {
-    try {
-      await client.close();
-    } catch (e) {
-      // ignore close errors
-    }
+function getAdapter() {
+  if (!llmAdapter) {
+    const config = createLLMAdapterFromEnv();
+    adapterMode = config.mode;
+    llmAdapter = config.adapter;
+    console.log(`[trigger] LLM adapter mode: ${adapterMode}`);
   }
-  
-  console.log(`[trigger] Connecting to Gateway: ${GATEWAY_URL}`);
-  client = new OpenClawClient(GATEWAY_URL, GATEWAY_TOKEN);
-  await client.connect();
-  console.log('[trigger] Connected');
+  return llmAdapter;
 }
 
-/**
- * Close Gateway connection
- */
-function closeGateway() {
-  if (client) {
-    client.close();
-    client = null;
+async function closeAdapter() {
+  if (llmAdapter && typeof llmAdapter.close === 'function') {
+    await llmAdapter.close();
   }
+  llmAdapter = null;
 }
 
 /**
@@ -153,10 +136,7 @@ function closeGateway() {
  */
 async function sendToAgent(agentId, message) {
   console.log(`[trigger] Sending to agent: ${agentId}`);
-  
-  await connectGateway();
-  
-  const reply = await client.sendToAgent(agentId, message, TIMEOUT_SECONDS);
+  const reply = await getAdapter().send(agentId, message);
   
   console.log(`[trigger] Got response (${reply.length} chars)`);
   
@@ -409,8 +389,8 @@ async function main() {
     console.log('  node trigger-ws.js aggregate <agentId> <sessionKey> <sourceLevel>');
     console.log('');
     console.log('Environment:');
-    console.log('  GATEWAY_URL   - WebSocket URL (default: ws://127.0.0.1:18789)');
-    console.log('  GATEWAY_TOKEN - Auth token (optional)');
+    console.log('  HM_LLM_MODE=mock|openclaw (default: openclaw)');
+    console.log('  GATEWAY_URL/GATEWAY_TOKEN/TRIGGER_TIMEOUT_SEC for openclaw mode');
     process.exit(1);
   }
   
@@ -450,12 +430,12 @@ async function main() {
         process.exit(1);
     }
   } finally {
-    closeGateway();
+    await closeAdapter();
   }
 }
 
 main().catch(err => {
   console.error('Fatal error:', err);
-  closeGateway();
+  closeAdapter().catch(() => {});
   process.exit(1);
 });
