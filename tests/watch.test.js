@@ -1,6 +1,7 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
-const { parseMessage, extractContent } = require('../scripts/watch');
+const { parseMessage, extractContent, processLine } = require('../scripts/watch');
+const { createEmptyStore } = require('../scripts/store');
 
 describe('watch.js', () => {
 
@@ -118,6 +119,49 @@ describe('watch.js', () => {
       });
       const msg = parseMessage(line);
       assert.equal(msg.content, 'Multi-part content');
+    });
+  });
+
+  describe('processLine', () => {
+    it('skips duplicate timestamps without crashing', async () => {
+      const storeRef = { current: createEmptyStore() };
+      const line = JSON.stringify({
+        type: 'message',
+        message: {
+          role: 'user',
+          content: 'Hello',
+          timestamp: '2026-01-01T10:00:00.000Z'
+        }
+      });
+
+      const agentConfig = {
+        thresholds: { L1: 999, default: 5 },
+        filters: {
+          exclude: ['HEARTBEAT_OK', 'NO_REPLY'],
+          excludePatterns: [],
+          countRoles: ['user', 'assistant'],
+          storeRoles: ['user', 'assistant']
+        },
+        autoCompact: { enabled: false }
+      };
+
+      const first = await processLine('test-agent', storeRef, line, {
+        agentConfig,
+        skipThresholdCheck: true,
+        skipPersistence: true,
+        skipContextRegenerate: true
+      });
+
+      const second = await processLine('test-agent', storeRef, line, {
+        agentConfig,
+        skipThresholdCheck: true,
+        skipPersistence: true,
+        skipContextRegenerate: true
+      });
+
+      assert.equal(first, true);
+      assert.equal(second, false);
+      assert.equal(storeRef.current.messages.length, 1);
     });
   });
 });

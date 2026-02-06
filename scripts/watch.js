@@ -120,6 +120,10 @@ function loadLastSessionId(agentId) {
   return null;
 }
 
+function getContextPath(agentId) {
+  return path.join(getDataDir(), agentId, 'CONTEXT.md');
+}
+
 /**
  * Regenerate CONTEXT.md (debounced)
  */
@@ -129,7 +133,7 @@ function scheduleContextRegenerate(agentId) {
   }
   contextRegenerateTimeout = setTimeout(() => {
     const scriptDir = __dirname;
-    const contextPath = path.join(scriptDir, '..', 'data', agentId, 'CONTEXT.md');
+    const contextPath = getContextPath(agentId);
     try {
       execSync(`node ${scriptDir}/context.js generate ${agentId} --output ${contextPath}`, { stdio: 'ignore' });
     } catch (err) {
@@ -155,7 +159,7 @@ async function injectContext(agentId, reason = 'manual') {
   }
   
   // Read CONTEXT.md
-  const contextPath = path.join(__dirname, '..', 'data', agentId, 'CONTEXT.md');
+  const contextPath = getContextPath(agentId);
   if (!fs.existsSync(contextPath)) {
     console.log(`[inject] No CONTEXT.md found for ${agentId}`);
     return;
@@ -486,7 +490,8 @@ async function runSummarization(agentId, sourceLevel) {
     // Step 2: Generate context
     console.log(`\n[${new Date().toISOString()}] Generating CONTEXT.md...`);
     
-    const contextCmd = `node ${scriptDir}/context.js generate ${agentId} --output ${scriptDir}/../data/${agentId}/CONTEXT.md`;
+    const contextPath = getContextPath(agentId);
+    const contextCmd = `node ${scriptDir}/context.js generate ${agentId} --output ${contextPath}`;
     
     const { stdout: contextOut, stderr: contextErr } = await execAsync(contextCmd, {
       cwd: scriptDir,
@@ -575,26 +580,35 @@ async function processLine(agentId, storeRef, line, options = {}) {
   if (!msg) return false;
   
   const added = addMessage(storeRef.current, msg);
-  
-  // Increment session message counter (only for countable messages)
+
+  // Skip duplicate timestamps safely
+  if (!added) {
+    return false;
+  }
+
+  // Increment session message counter (only for newly added countable messages)
   if (msg.shouldCount) {
     sessionMessageCount++;
   }
-  
+
   if (options.verbose) {
     const preview = msg.content.substring(0, 50).replace(/\n/g, ' ');
     const ts = formatTimestamp(added.timestamp);
     console.log(`[${ts}] ${msg.role.toUpperCase()}: ${preview}${msg.content.length > 50 ? '...' : ''}`);
   }
-  
-  // Save store after each message
-  saveStore(agentId, storeRef.current);
-  
+
+  // Save store after each new message
+  if (!options.skipPersistence) {
+    saveStore(agentId, storeRef.current);
+  }
+
   // Schedule CONTEXT.md regeneration (debounced)
-  scheduleContextRegenerate(agentId);
-  
+  if (!options.skipContextRegenerate) {
+    scheduleContextRegenerate(agentId);
+  }
+
   // AutoCompact: check threshold and retry strategy
-  const agentCfg = loadAgentConfig(agentId);
+  const agentCfg = options.agentConfig || loadAgentConfig(agentId);
   const autoCompact = agentCfg.autoCompact || {};
   
   if (autoCompact.enabled) {
@@ -779,7 +793,8 @@ async function switchToSession(agentId, newSessionId, storeRef) {
   
   // Load fresh store (keep artifacts, reset messages for new session)
   storeRef.current = loadStore(agentId);
-  console.log(`   Loaded store: ${storeRef.current.messages.length} messages, ${storeRef.current.artifacts.length} artifacts`);
+  const artifactCount = Object.values(storeRef.current.artifacts || {}).reduce((sum, arr) => sum + (arr?.length || 0), 0);
+  console.log(`   Loaded store: ${storeRef.current.messages.length} messages, ${artifactCount} artifacts`);
   
   // Process existing file
   console.log(`   Reading existing messages from new JSONL...`);
@@ -789,7 +804,7 @@ async function switchToSession(agentId, newSessionId, storeRef) {
   // Generate fresh CONTEXT.md
   console.log(`   Regenerating CONTEXT.md...`);
   const scriptDir = __dirname;
-  const contextPath = path.join(scriptDir, '..', 'data', agentId, 'CONTEXT.md');
+  const contextPath = getContextPath(agentId);
   try {
     execSync(`node ${scriptDir}/context.js generate ${agentId} --output ${contextPath}`, { stdio: 'pipe' });
   } catch (err) {
@@ -997,7 +1012,7 @@ async function main() {
   // Generate initial CONTEXT.md
   console.log(`\n📝 Generating CONTEXT.md...`);
   const scriptDir = __dirname;
-  const contextPath = path.join(scriptDir, '..', 'data', agentId, 'CONTEXT.md');
+  const contextPath = getContextPath(agentId);
   try {
     execSync(`node ${scriptDir}/context.js generate ${agentId} --output ${contextPath}`, { stdio: 'inherit' });
     console.log(`   CONTEXT.md updated`);
