@@ -1,0 +1,53 @@
+{
+  "agents": [
+    {
+      "id": "main",
+      "name": "main",
+      "enabled": true,
+      "isSubagent": false,
+      "filters": {
+        "countRoles": ["user", "assistant"],
+        "exclude": [
+          "HEARTBEAT_OK",
+          "NO_REPLY",
+          "MEMORY TASK:",
+          "ANNOUNCE_SKIP"
+        ],
+        "excludePatterns": [
+          "^\\{\\s*\"type\":\\s*\"toolCall\"",
+          "^\\{\\s*\"type\":\\s*\"toolResult\""
+        ]
+      }
+    },
+    {
+      "id": "council-psychologist",
+      "name": "council-psychologist",
+      "enabled": true,
+      "isSubagent": true,
+      "filters": {
+        "countRoles": ["user", "assistant"],
+        "exclude": ["HEARTBEAT_OK", "NO_REPLY", "MEMORY TASK:", "ANNOUNCE_SKIP"]
+      }
+    },
+    {
+      "id": "council-fitness",
+      "name": "council-fitness",
+      "enabled": true,
+      "isSubagent": false,
+      "filters": {
+        "countRoles": ["user", "assistant"],
+        "exclude": ["HEARTBEAT_OK", "NO_REPLY", "MEMORY TASK:", "ANNOUNCE_SKIP"]
+      }
+    },
+    {
+      "id": "council-dietitian",
+      "name": "council-dietitian",
+      "enabled": true,
+      "isSubagent": false,
+      "filters": {
+        "countRoles": ["user", "assistant"],
+        "exclude": ["HEARTBEAT_OK", "NO_REPLY", "MEMORY TASK:", "ANNOUNCE_SKIP"]
+      }
+    }
+  ]
+}

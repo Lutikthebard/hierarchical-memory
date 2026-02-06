@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Memory Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <style>
+    .badge-l1 { @apply bg-purple-500 text-white text-xs px-2 py-0.5 rounded font-bold; }
+    .badge-l2 { @apply bg-blue-500 text-white text-xs px-2 py-0.5 rounded font-bold; }
+    .badge-l3 { @apply bg-green-500 text-white text-xs px-2 py-0.5 rounded font-bold; }
+  </style>
+</head>
+<body class="bg-gray-50">
+  <div x-data="dashboard()" x-init="init()" class="h-screen flex flex-col">
+    
+    <!-- Header -->
+    <div class="bg-white border-b px-4 py-3">
+      <div class="flex items-center justify-between">
+        <h1 class="text-xl font-bold">🧠 Hierarchical Memory</h1>
+        <button @click="showAgentManager = true" class="bg-gray-100 hover:bg-gray-200 px-3 py-1 rounded text-sm">
+          ⚙️ Manage Agents
+        </button>
+      </div>
+    </div>
+    
+    <!-- Agent Selector -->
+    <div class="bg-white border-b px-4 py-2">
+      <div class="flex items-center gap-4">
+        <label class="text-sm font-medium">Agent:</label>
+        <select x-model="selectedAgent" @change="switchAgent()" class="border rounded px-3 py-1 text-sm">
+          <template x-for="agent in agents" :key="agent.id">
+            <option :value="agent.id" x-text="agent.name + (agent.isSubagent ? ' [SUB]' : '') + (agent.running ? ' ✓' : '')"></option>
+          </template>
+        </select>
+        <button @click="activeTab = 'config'; loadAgentConfig()" class="text-sm px-2 py-1 bg-orange-100 hover:bg-orange-200 rounded text-orange-700" title="Config">
+          ⚙️
+        </button>
+        <div class="flex gap-2 ml-auto">
+          <template x-if="currentAgentStatus.running">
+            <span class="bg-green-100 text-green-700 px-2 py-1 rounded text-xs">Running</span>
+          </template>
+          <template x-if="!currentAgentStatus.running">
+            <span class="bg-gray-100 text-gray-600 px-2 py-1 rounded text-xs">Stopped</span>
+          </template>
+          <button @click="toggleAgent()" class="text-sm px-3 py-1 rounded" 
+                  :class="currentAgentStatus.running ? 'bg-red-500 text-white' : 'bg-green-500 text-white'">
+            <span x-text="currentAgentStatus.running ? 'Stop' : 'Start'"></span>
+          </button>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Stats Bar -->
+    <div class="bg-white border-b px-4 py-2">
+      <div class="grid grid-cols-4 gap-4 text-center">
+        <div>
+          <div class="text-xs text-gray-600">Messages</div>
+          <div class="text-lg font-bold" x-text="stats.messagesCount || 0"></div>
+        </div>
+        <div>
+          <div class="text-xs text-gray-600">Progress</div>
+          <div class="text-lg font-bold">
+            <span x-text="stats.unsummarized || 0"></span>/<span x-text="stats.threshold || 60"></span>
+          </div>
+        </div>
+        <div>
+          <div class="text-xs text-gray-600">L1</div>
+          <div class="text-lg font-bold text-purple-600" x-text="stats.artifacts?.L1 || 0"></div>
+        </div>
+        <div>
+          <div class="text-xs text-gray-600">L2/L3</div>
+          <div class="text-lg font-bold text-blue-600">
+            <span x-text="stats.artifacts?.L2 || 0"></span>/<span x-text="stats.artifacts?.L3 || 0"></span>
+          </div>
+        </div>
+      </div>
+      <!-- Progress Bars -->
+      <div class="mt-2 space-y-1">
+        <!-- L1 Summarization Progress -->
+        <div class="flex items-center gap-2">
+          <div class="text-xs text-gray-600 w-24">L1 Summary:</div>
+          <div class="flex-1 h-2 bg-gray-200 rounded-full overflow-hidden">
+            <div class="h-full transition-all duration-300"
+                 :class="stats.progress >= 0.8 ? 'bg-red-500' : stats.progress >= 0.5 ? 'bg-yellow-500' : 'bg-green-500'"
+                 :style="'width: ' + ((stats.progress || 0) * 100) + '%'"></div>
+          </div>
+        </div>
+        <!-- Auto-Compact Progress -->
+        <div class="flex items-center gap-2" x-show="agentConfig.autoCompact?.enabled">
+          <div class="text-xs text-gray-600 w-24">Auto-Compact:</div>
+          <div class="flex-1 h-2 bg-gray-200 rounded-full overflow-hidden">
+            <div class="h-full transition-all duration-300"
+                 :class="stats.compactProgress >= 0.8 ? 'bg-orange-500' : stats.compactProgress >= 0.5 ? 'bg-yellow-500' : 'bg-blue-500'"
+                 :style="'width: ' + ((stats.compactProgress || 0) * 100) + '%'"></div>
+          </div>
+          <div class="text-xs text-gray-600 whitespace-nowrap">
+            <span x-text="stats.sessionMessageCount || 0"></span>/<span x-text="stats.compactThreshold || 150"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Tabs -->
+    <div class="bg-white border-b">
+      <div class="flex">
+        <button @click="activeTab = 'context'" :class="activeTab === 'context' ? 'border-b-2 border-blue-500 font-semibold' : ''" class="px-4 py-2 text-sm">Context</button>
+        <button @click="activeTab = 'l1'" :class="activeTab === 'l1' ? 'border-b-2 border-purple-500 font-semibold' : ''" class="px-4 py-2 text-sm">L1 (<span x-text="artifacts.L1.length"></span>)</button>
+        <button @click="activeTab = 'l2'" :class="activeTab === 'l2' ? 'border-b-2 border-blue-500 font-semibold' : ''" class="px-4 py-2 text-sm">L2 (<span x-text="artifacts.L2.length"></span>)</button>
+        <button @click="activeTab = 'l3'" :class="activeTab === 'l3' ? 'border-b-2 border-green-500 font-semibold' : ''" class="px-4 py-2 text-sm">L3 (<span x-text="artifacts.L3.length"></span>)</button>
+        <button @click="activeTab = 'messages'" :class="activeTab === 'messages' ? 'border-b-2 border-gray-500 font-semibold' : ''" class="px-4 py-2 text-sm">Messages</button>
+        <button @click="activeTab = 'logs'" :class="activeTab === 'logs' ? 'border-b-2 border-gray-500 font-semibold' : ''" class="px-4 py-2 text-sm">Logs</button>
+      </div>
+    </div>
+    
+    <!-- Content -->
+    <div class="flex-1 overflow-auto p-4">
+      
+      <!-- Context Tab -->
+      <div x-show="activeTab === 'context'">
+        <div class="space-y-2">
+          <template x-for="(section, idx) in contextSections" :key="'sec-' + idx">
+            <div class="border rounded">
+              <div @click="toggle('sec-' + idx)" class="bg-gray-100 p-2 cursor-pointer hover:bg-gray-200">
+                <div class="flex justify-between items-center">
+                  <span class="font-semibold text-sm" x-text="section.title"></span>
+                  <svg class="w-4 h-4 transition-transform" :class="expanded['sec-' + idx] ? 'rotate-180' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                  </svg>
+                </div>
+              </div>
+              <div x-show="expanded['sec-' + idx]" class="p-3 text-sm whitespace-pre-wrap" style="display: none;" x-text="section.content"></div>
+            </div>
+          </template>
+        </div>
+      </div>
+      
+      <!-- L1 Tab -->
+      <div x-show="activeTab === 'l1'">
+        <div class="space-y-2">
+          <template x-for="(art, idx) in artifacts.L1" :key="'l1-' + idx">
+            <div class="border border-purple-300 rounded">
+              <div @click="toggle('l1-' + idx)" class="bg-purple-50 p-2 cursor-pointer hover:bg-purple-100">
+                <div class="flex items-start gap-2">
+                  <span class="badge-l1">L1</span>
+                  <div class="flex-1 min-w-0">
+                    <div class="text-xs text-gray-600" x-text="formatTime(art.startTimestamp) + ' → ' + formatTime(art.endTimestamp)"></div>
+                    <div class="text-sm font-medium" x-text="extractTitle(art.content)"></div>
+                  </div>
+                  <button @click.stop="drilldown(1, idx)" class="text-purple-600 text-xs hover:underline px-2">📜</button>
+                </div>
+              </div>
+              <div x-show="expanded['l1-' + idx]" class="p-2 bg-white" style="display: none;">
+                <pre class="text-xs whitespace-pre-wrap" x-text="art.content"></pre>
+              </div>
+            </div>
+          </template>
+          <div x-show="artifacts.L1.length === 0" class="text-gray-500 text-center py-8">No L1 artifacts</div>
+        </div>
+      </div>
+      
+      <!-- L2 Tab -->
+      <div x-show="activeTab === 'l2'">
+        <div class="space-y-2">
+          <template x-for="(art, idx) in artifacts.L2" :key="'l2-' + idx">
+            <div class="border border-blue-300 rounded">
+              <div @click="toggle('l2-' + idx)" class="bg-blue-50 p-2 cursor-pointer hover:bg-blue-100">
+                <div class="flex items-start gap-2">
+                  <span class="badge-l2">L2</span>
+                  <div class="flex-1 min-w-0">
+                    <div class="text-xs text-gray-600" x-text="formatTime(art.startTimestamp) + ' → ' + formatTime(art.endTimestamp)"></div>
+                    <div class="text-sm font-medium" x-text="extractTitle(art.content)"></div>
+                  </div>
+                  <button @click.stop="drilldown(2, idx)" class="text-blue-600 text-xs hover:underline px-2">📂</button>
+                </div>
+              </div>
+              <div x-show="expanded['l2-' + idx]" class="p-2 bg-white" style="display: none;">
+                <pre class="text-xs whitespace-pre-wrap" x-text="art.content"></pre>
+              </div>
+            </div>
+          </template>
+          <div x-show="artifacts.L2.length === 0" class="text-gray-500 text-center py-8">No L2 artifacts</div>
+        </div>
+      </div>
+      
+      <!-- L3 Tab -->
+      <div x-show="activeTab === 'l3'">
+        <div class="space-y-2">
+          <template x-for="(art, idx) in artifacts.L3" :key="'l3-' + idx">
+            <div class="border border-green-300 rounded">
+              <div @click="toggle('l3-' + idx)" class="bg-green-50 p-2 cursor-pointer hover:bg-green-100">
+                <div class="flex items-start gap-2">
+                  <span class="badge-l3">L3</span>
+                  <div class="flex-1 min-w-0">
+                    <div class="text-xs text-gray-600" x-text="formatTime(art.startTimestamp) + ' → ' + formatTime(art.endTimestamp)"></div>
+                    <div class="text-sm font-medium" x-text="extractTitle(art.content)"></div>
+                  </div>
+                </div>
+              </div>
+              <div x-show="expanded['l3-' + idx]" class="p-2 bg-white" style="display: none;">
+                <pre class="text-xs whitespace-pre-wrap" x-text="art.content"></pre>
+              </div>
+            </div>
+          </template>
+          <div x-show="artifacts.L3.length === 0" class="text-gray-500 text-center py-8">No L3 artifacts</div>
+        </div>
+      </div>
+      
+      <!-- Messages Tab -->
+      <div x-show="activeTab === 'messages'">
+        <!-- Date picker for archived messages -->
+        <div class="mb-4 bg-white border rounded p-3">
+          <div class="flex items-center gap-3 flex-wrap">
+            <label class="text-sm font-medium text-gray-700">📅 Browse by date:</label>
+            <select x-model="selectedMessageDate" @change="loadArchivedMessages()" class="border rounded px-3 py-1 text-sm">
+              <option value="">Current session</option>
+              <template x-for="date in messageDates" :key="date">
+                <option :value="date" x-text="date"></option>
+              </template>
+            </select>
+            <span x-show="selectedMessageDate && !archivedMessagesLoading" class="text-xs text-gray-500" x-text="archivedMessages.length + ' messages'"></span>
+            <span x-show="archivedMessagesLoading" class="text-xs text-gray-500">Loading...</span>
+          </div>
+        </div>
+
+        <!-- Current session messages (when no date selected) -->
+        <div x-show="!selectedMessageDate" class="space-y-1">
+          <div class="text-xs text-gray-500 mb-2">Showing last 20 messages from current store</div>
+          <template x-for="(msg, idx) in messages" :key="'msg-' + idx">
+            <div @click="toggle('msg-' + idx)" class="bg-white border rounded p-2 cursor-pointer">
+              <div class="flex items-center gap-2">
+                <span class="text-xs px-2 py-0.5 rounded font-bold" :class="msg.role === 'user' ? 'bg-blue-500 text-white' : 'bg-green-500 text-white'" x-text="msg.role"></span>
+                <span class="text-xs text-gray-400 whitespace-nowrap" x-text="formatTime(msg.timestamp)"></span>
+                <span class="text-xs truncate flex-1" x-show="!expanded['msg-' + idx]" x-text="msg.content?.substring(0, 100)"></span>
+              </div>
+              <div x-show="expanded['msg-' + idx]" class="mt-2 text-xs whitespace-pre-wrap" style="display: none;" x-text="msg.content"></div>
+            </div>
+          </template>
+          <div x-show="messages.length === 0" class="text-gray-500 text-center py-8">No messages in current store (may have been archived)</div>
+        </div>
+
+        <!-- Archived messages (when date selected) -->
+        <div x-show="selectedMessageDate" class="space-y-1">
+          <template x-for="(msg, idx) in archivedMessages" :key="'amsg-' + idx">
+            <div @click="toggle('amsg-' + idx)" class="bg-white border rounded p-2 cursor-pointer">
+              <div class="flex items-center gap-2">
+                <span class="text-xs px-2 py-0.5 rounded font-bold" :class="msg.role === 'user' ? 'bg-blue-500 text-white' : 'bg-green-500 text-white'" x-text="msg.role"></span>
+                <span class="text-xs text-gray-400 whitespace-nowrap" x-text="formatTime(msg.timestamp)"></span>
+                <span class="text-xs truncate flex-1" x-show="!expanded['amsg-' + idx]" x-text="msg.content?.substring(0, 100)"></span>
+              </div>
+              <div x-show="expanded['amsg-' + idx]" class="mt-2 text-xs whitespace-pre-wrap" style="display: none;" x-text="msg.content"></div>
+            </div>
+          </template>
+          <div x-show="archivedMessages.length === 0 && !archivedMessagesLoading" class="text-gray-500 text-center py-8">No archived messages for this date</div>
+        </div>
+      </div>
+      
+      <!-- Logs Tab -->
+      <div x-show="activeTab === 'logs'" class="space-y-2">
+        <div class="bg-gray-900 text-gray-100 rounded p-2 h-96 overflow-auto font-mono text-xs" x-ref="logContainer">
+          <template x-if="logs.length === 0">
+            <div class="text-gray-500 text-center py-8">No logs yet. Start the watcher to see logs.</div>
+          </template>
+          <template x-if="logs.length > 0">
+            <div>
+              <template x-for="(log, idx) in logs" :key="'log-' + idx">
+                <div x-text="log" class="text-green-400"></div>
+              </template>
+            </div>
+          </template>
+        </div>
+      </div>
+      
+      <!-- Config Tab -->
+      <div x-show="activeTab === 'config'">
+        <div class="space-y-6">
+          <!-- Thresholds -->
+          <div class="bg-white border rounded p-4">
+            <h3 class="font-bold text-sm mb-3">📊 Thresholds</h3>
+            <div class="grid grid-cols-2 gap-4">
+              <div>
+                <label class="text-xs text-gray-600">L1 (messages)</label>
+                <input type="number" x-model.number="agentConfig.thresholds.L1" class="w-full border rounded px-2 py-1 text-sm">
+              </div>
+              <div>
+                <label class="text-xs text-gray-600">Default (artifacts for L2+)</label>
+                <input type="number" x-model.number="agentConfig.thresholds.default" class="w-full border rounded px-2 py-1 text-sm">
+              </div>
+            </div>
+          </div>
+          
+          <!-- Prompts -->
+          <div class="bg-white border rounded p-4">
+            <h3 class="font-bold text-sm mb-3">📝 Prompts</h3>
+            <div class="space-y-3">
+              <div>
+                <label class="text-xs text-gray-600">L1 Summary Prompt</label>
+                <textarea x-model="agentConfig.prompts.l1" rows="3" class="w-full border rounded px-2 py-1 text-sm font-mono"></textarea>
+              </div>
+              <div>
+                <label class="text-xs text-gray-600">Aggregation Prompt (use {level} for source level)</label>
+                <textarea x-model="agentConfig.prompts.aggregate" rows="3" class="w-full border rounded px-2 py-1 text-sm font-mono"></textarea>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Filters -->
+          <div class="bg-white border rounded p-4">
+            <h3 class="font-bold text-sm mb-3">🔍 Filters</h3>
+            <div class="space-y-3">
+              <div>
+                <label class="text-xs text-gray-600">Exclude (exact match, comma-separated)</label>
+                <input type="text" :value="agentConfig.filters.exclude.join(', ')" 
+                       @change="agentConfig.filters.exclude = $event.target.value.split(',').map(s => s.trim()).filter(s => s)"
+                       class="w-full border rounded px-2 py-1 text-sm font-mono">
+              </div>
+              <div>
+                <label class="text-xs text-gray-600">Exclude Patterns (regex, comma-separated)</label>
+                <input type="text" :value="agentConfig.filters.excludePatterns.join(', ')"
+                       @change="agentConfig.filters.excludePatterns = $event.target.value.split(',').map(s => s.trim()).filter(s => s)"
+                       class="w-full border rounded px-2 py-1 text-sm font-mono">
+              </div>
+              <div class="grid grid-cols-2 gap-4">
+                <div>
+                  <label class="text-xs text-gray-600">Count Roles (toward threshold)</label>
+                  <input type="text" :value="agentConfig.filters.countRoles.join(', ')"
+                         @change="agentConfig.filters.countRoles = $event.target.value.split(',').map(s => s.trim()).filter(s => s)"
+                         class="w-full border rounded px-2 py-1 text-sm font-mono">
+                </div>
+                <div>
+                  <label class="text-xs text-gray-600">Store Roles (saved to memory)</label>
+                  <input type="text" :value="agentConfig.filters.storeRoles.join(', ')"
+                         @change="agentConfig.filters.storeRoles = $event.target.value.split(',').map(s => s.trim()).filter(s => s)"
+                         class="w-full border rounded px-2 py-1 text-sm font-mono">
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Auto Compact -->
+          <div class="bg-white border rounded p-4">
+            <h3 class="font-bold text-sm mb-3">🗜️ Auto-Compact</h3>
+            <div class="space-y-2">
+              <label class="flex items-center gap-2">
+                <input type="checkbox" x-model="agentConfig.autoCompact.enabled" class="rounded">
+                <span class="text-sm">Enabled</span>
+              </label>
+              <div class="ml-4 space-y-2" :class="!agentConfig.autoCompact.enabled && 'opacity-50'">
+                <div class="flex items-center gap-2">
+                  <label class="text-sm w-32">Message threshold:</label>
+                  <input type="number" x-model.number="agentConfig.autoCompact.messageThreshold" 
+                         :disabled="!agentConfig.autoCompact.enabled"
+                         class="w-20 border rounded px-2 py-1 text-sm">
+                </div>
+                <div class="flex items-center gap-2">
+                  <label class="text-sm w-32">Retries:</label>
+                  <input type="number" x-model.number="agentConfig.autoCompact.retries" 
+                         :disabled="!agentConfig.autoCompact.enabled"
+                         class="w-20 border rounded px-2 py-1 text-sm">
+                </div>
+                <div class="flex items-center gap-2">
+                  <label class="text-sm w-32">Retry delay (ms):</label>
+                  <input type="number" x-model.number="agentConfig.autoCompact.retryDelayMs" 
+                         :disabled="!agentConfig.autoCompact.enabled"
+                         class="w-20 border rounded px-2 py-1 text-sm">
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Auto Inject Context -->
+          <div class="bg-white border rounded p-4">
+            <h3 class="font-bold text-sm mb-3">📥 Auto-Inject Context</h3>
+            <div class="space-y-2">
+              <label class="flex items-center gap-2">
+                <input type="checkbox" x-model="agentConfig.autoInjectContext.enabled" class="rounded">
+                <span class="text-sm">Enabled</span>
+              </label>
+              <label class="flex items-center gap-2 ml-4">
+                <input type="checkbox" x-model="agentConfig.autoInjectContext.onNewSession" :disabled="!agentConfig.autoInjectContext.enabled" class="rounded">
+                <span class="text-sm" :class="!agentConfig.autoInjectContext.enabled && 'text-gray-400'">On new session / watcher restart</span>
+              </label>
+              <label class="flex items-center gap-2 ml-4">
+                <input type="checkbox" x-model="agentConfig.autoInjectContext.onCompaction" :disabled="!agentConfig.autoInjectContext.enabled" class="rounded">
+                <span class="text-sm" :class="!agentConfig.autoInjectContext.enabled && 'text-gray-400'">On compaction detected</span>
+              </label>
+            </div>
+          </div>
+          
+          <!-- Save Button -->
+          <div class="flex justify-end gap-2">
+            <button @click="loadAgentConfig()" class="px-4 py-2 text-sm border rounded hover:bg-gray-50">Reset</button>
+            <button @click="saveAgentConfig()" class="px-4 py-2 text-sm bg-blue-500 text-white rounded hover:bg-blue-600">Save Config</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Agent Manager Modal -->
+    <div x-show="showAgentManager" class="fixed inset-0 bg-black bg-opacity-50 z-40 flex items-center justify-center p-4" style="display: none;">
+      <div class="bg-white rounded-lg shadow-xl w-full max-w-lg">
+        <div class="flex justify-between items-center p-4 border-b">
+          <h3 class="font-bold">Manage Agents</h3>
+          <button @click="showAgentManager = false" class="text-gray-500 hover:text-gray-700 text-2xl">&times;</button>
+        </div>
+        <div class="p-4">
+          <!-- Add Agent Form -->
+          <div class="mb-4 space-y-2">
+            <select x-model="newAgentId" class="w-full border rounded px-3 py-2 text-sm">
+              <option value="">-- Select Agent --</option>
+              <template x-for="agentId in availableAgents.filter(a => !agents.find(x => x.id === a))" :key="agentId">
+                <option :value="agentId" x-text="agentId"></option>
+              </template>
+            </select>
+            <div class="flex items-center gap-2">
+              <label class="flex items-center gap-2 text-sm text-gray-700">
+                <input type="checkbox" x-model="newAgentIsSubagent" class="rounded">
+                <span>Subagent (uses main's sessions)</span>
+              </label>
+              <button @click="addAgent()" class="ml-auto bg-blue-500 text-white px-4 py-2 rounded text-sm">Add</button>
+            </div>
+          </div>
+          
+          <!-- Agents List -->
+          <div class="space-y-2">
+            <template x-for="agent in agents" :key="agent.id">
+              <div class="flex items-center justify-between p-3 border rounded">
+                <div>
+                  <div class="flex items-center gap-2">
+                    <span class="font-medium" x-text="agent.name"></span>
+                    <span x-show="agent.isSubagent" class="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded">SUB</span>
+                  </div>
+                  <div class="text-xs text-gray-500" x-text="agent.id"></div>
+                </div>
+                <div class="flex items-center gap-2">
+                  <span class="text-xs" :class="agent.running ? 'text-green-600' : 'text-gray-400'" x-text="agent.running ? '● Running' : '○ Stopped'"></span>
+                  <label class="relative inline-flex items-center cursor-pointer">
+                    <input type="checkbox" :checked="agent.enabled" @change="toggleAgentEnabled(agent.id)" class="sr-only peer">
+                    <div class="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600"></div>
+                  </label>
+                  <button @click="removeAgent(agent.id)" class="text-red-500 hover:text-red-700 text-sm">✕</button>
+                </div>
+              </div>
+            </template>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Drilldown Modal -->
+    <div x-show="drilldownModal.open" class="fixed inset-0 bg-black bg-opacity-50 z-40 flex items-center justify-center p-4" style="display: none;">
+      <div class="bg-white rounded-lg shadow-xl w-full max-w-4xl max-h-[90vh] flex flex-col">
+        <div class="flex justify-between items-center p-4 border-b">
+          <h3 class="font-bold" x-text="drilldownModal.title"></h3>
+          <button @click="drilldownModal.open = false" class="text-gray-500 hover:text-gray-700 text-2xl">&times;</button>
+        </div>
+        <div class="flex-1 overflow-auto p-4">
+          <div x-show="drilldownModal.loading" class="text-center py-8 text-gray-500">Loading...</div>
+          
+          <!-- Messages -->
+          <div x-show="!drilldownModal.loading && drilldownModal.type === 'messages'">
+            <div class="text-sm text-gray-600 mb-3" x-text="drilldownModal.messages.length + ' messages'"></div>
+            <div class="space-y-2">
+              <template x-for="(msg, idx) in drilldownModal.messages" :key="'dm-' + idx">
+                <div class="border rounded p-2">
+                  <div class="flex items-center gap-2 mb-1">
+                    <span class="text-xs px-2 py-0.5 rounded font-bold" :class="msg.role === 'user' ? 'bg-blue-500 text-white' : 'bg-green-500 text-white'" x-text="msg.role"></span>
+                    <span class="text-xs text-gray-500" x-text="formatTime(msg.timestamp)"></span>
+                  </div>
+                  <div class="text-xs whitespace-pre-wrap" x-text="msg.content"></div>
+                </div>
+              </template>
+            </div>
+          </div>
+          
+          <!-- Source Artifacts -->
+          <div x-show="!drilldownModal.loading && drilldownModal.type === 'artifacts'">
+            <div class="text-sm text-gray-600 mb-3" x-text="drilldownModal.sourceArtifacts.length + ' source artifacts'"></div>
+            <div class="space-y-2">
+              <template x-for="(art, idx) in drilldownModal.sourceArtifacts" :key="'da-' + idx">
+                <div class="border border-purple-300 rounded p-3">
+                  <div class="flex items-center gap-2 mb-2">
+                    <span class="badge-l1">L1</span>
+                    <span class="text-xs text-gray-600" x-text="formatTime(art.startTimestamp) + ' → ' + formatTime(art.endTimestamp)"></span>
+                  </div>
+                  <pre class="text-xs whitespace-pre-wrap bg-gray-50 p-2 rounded" x-text="art.content"></pre>
+                </div>
+              </template>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+  </div>
+  
+  <script src="app.js"></script>
+</body>
+</html>
