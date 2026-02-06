@@ -8,6 +8,7 @@ const path = require('path');
 
 // Import store API
 const store = require('../scripts/store');
+const { extractContent } = require('../scripts/message-parser');
 
 const execAsync = promisify(exec);
 const app = express();
@@ -371,11 +372,7 @@ async function getSessionMessageCount(agentId) {
         if (!countRoles.includes(role)) continue;
         
         // Extract content
-        const content = typeof msg.content === 'string' 
-          ? msg.content 
-          : Array.isArray(msg.content)
-            ? msg.content.filter(item => item.type === 'text').map(item => item.text).join('\n')
-            : '';
+        const content = extractContent(msg.content);
         
         if (!content) continue;
         
@@ -410,37 +407,115 @@ async function getSessionMessageCount(agentId) {
   }
 }
 
+function handleAgentStatus(res, agentId, options = {}) {
+  const status = getWatcherStatus(agentId);
+  const payload = { agentId, ...status };
+  if (options.includeLegacySession) {
+    payload.sessionId = null;
+  }
+  res.json(payload);
+}
+
+async function handleAgentStats(res, agentId, options = {}) {
+  const legacy = options.legacy === true;
+  const s = store.loadStore(agentId);
+  const agentConfig = store.loadAgentConfig(agentId);
+  const threshold = agentConfig.thresholds?.L1 || 60;
+
+  const unsummarizedItems = store.getUnsummarized(s, 0, agentId);
+  const countable = store.filterForCounting(unsummarizedItems, agentConfig);
+  const unsummarized = legacy ? (s.messages?.length || 0) : countable.length;
+
+  const payload = {
+    messagesCount: s.messages?.length || 0,
+    artifacts: {
+      L1: (s.artifacts?.[1] || []).length,
+      L2: (s.artifacts?.[2] || []).length,
+      L3: (s.artifacts?.[3] || []).length
+    },
+    threshold,
+    unsummarized,
+    progress: Math.min(1, unsummarized / threshold)
+  };
+
+  if (!legacy) {
+    const sessionMessageCount = await getSessionMessageCount(agentId);
+    const compactThreshold = agentConfig.autoCompact?.messageThreshold || 150;
+    payload.sessionMessageCount = sessionMessageCount;
+    payload.compactThreshold = compactThreshold;
+    payload.compactProgress = Math.min(1, sessionMessageCount / compactThreshold);
+  }
+
+  res.json(payload);
+}
+
+function handleAgentStore(res, agentId) {
+  const s = store.loadStore(agentId);
+  const recentMessages = (s.messages || []).slice(-20);
+
+  res.json({
+    artifacts: {
+      L1: s.artifacts?.[1] || [],
+      L2: s.artifacts?.[2] || [],
+      L3: s.artifacts?.[3] || []
+    },
+    recentMessages
+  });
+}
+
+async function handleAgentContext(res, agentId) {
+  const contextPath = path.join(getAgentDataDir(agentId), 'CONTEXT.md');
+  try {
+    const content = await fs.readFile(contextPath, 'utf8');
+    const sections = parseContextSections(content);
+    res.json({ content, sections });
+  } catch (_e) {
+    res.json({ content: '', sections: [] });
+  }
+}
+
+async function handleAgentLogs(req, res, agentId) {
+  const logPath = path.join(getAgentDataDir(agentId), 'watch.log');
+  const lines = parseInt(req.query.lines) || 50;
+  try {
+    const content = await fs.readFile(logPath, 'utf8');
+    const allLines = content.split('\n');
+    res.json({ logs: allLines.slice(-lines) });
+  } catch (_e) {
+    res.json({ logs: [] });
+  }
+}
+
+function handleArtifactDrilldown(res, agentId, level, index) {
+  const levelNum = parseInt(level);
+  const indexNum = parseInt(index);
+
+  const s = store.loadStore(agentId);
+  const levelArtifacts = s.artifacts?.[String(levelNum)] || [];
+
+  if (indexNum < 0 || indexNum >= levelArtifacts.length) {
+    return res.status(404).json({ error: 'Artifact not found' });
+  }
+
+  const artifact = levelArtifacts[indexNum];
+  if (levelNum === 1) {
+    const messages = store.getArchivedMessages(agentId, artifact.startTimestamp, artifact.endTimestamp);
+    return res.json({ artifact, messages, source: 'archive' });
+  }
+
+  const sourceLevel = levelNum - 1;
+  const sourceArtifacts = (s.artifacts?.[String(sourceLevel)] || []).filter(a =>
+    new Date(a.endTimestamp) >= new Date(artifact.startTimestamp) &&
+    new Date(a.startTimestamp) <= new Date(artifact.endTimestamp)
+  );
+  return res.json({ artifact, sourceArtifacts, source: `L${sourceLevel}` });
+}
+
 // GET /api/agents/:id/stats
 app.get('/api/agents/:id/stats', async (req, res) => {
   const { id } = req.params;
   try {
-    const s = store.loadStore(id);
-    const agentConfig = store.loadAgentConfig(id);
-    const threshold = agentConfig.thresholds?.L1 || 60;
-    
-    // Get unsummarized messages and apply counting filters
-    const unsummarizedItems = store.getUnsummarized(s, 0, id);
-    const countable = store.filterForCounting(unsummarizedItems, agentConfig);
-    const unsummarized = countable.length;
-    
-    // Get session message count (for autoCompact threshold)
-    const sessionMessageCount = await getSessionMessageCount(id);
-    const compactThreshold = agentConfig.autoCompact?.messageThreshold || 150;
-
-    res.json({
-      messagesCount: s.messages?.length || 0,  // Total in store
-      artifacts: {
-        L1: (s.artifacts?.[1] || []).length,
-        L2: (s.artifacts?.[2] || []).length,
-        L3: (s.artifacts?.[3] || []).length
-      },
-      threshold,
-      unsummarized,
-      progress: Math.min(1, unsummarized / threshold),
-      sessionMessageCount,
-      compactThreshold,
-      compactProgress: Math.min(1, sessionMessageCount / compactThreshold)
-    });
+    await handleAgentStats(res, id);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -450,17 +525,7 @@ app.get('/api/agents/:id/stats', async (req, res) => {
 app.get('/api/agents/:id/store', (req, res) => {
   const { id } = req.params;
   try {
-    const s = store.loadStore(id);
-    const recentMessages = (s.messages || []).slice(-20);
-
-    res.json({
-      artifacts: {
-        L1: s.artifacts?.[1] || [],
-        L2: s.artifacts?.[2] || [],
-        L3: s.artifacts?.[3] || []
-      },
-      recentMessages
-    });
+    handleAgentStore(res, id);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -469,30 +534,20 @@ app.get('/api/agents/:id/store', (req, res) => {
 // GET /api/agents/:id/context
 app.get('/api/agents/:id/context', async (req, res) => {
   const { id } = req.params;
-  const contextPath = path.join(getAgentDataDir(id), 'CONTEXT.md');
-  
   try {
-    const content = await fs.readFile(contextPath, 'utf8');
-    const sections = parseContextSections(content);
-    res.json({ content, sections });
+    await handleAgentContext(res, id);
   } catch (e) {
-    res.json({ content: '', sections: [] });
+    res.status(500).json({ error: e.message });
   }
 });
 
 // GET /api/agents/:id/logs
 app.get('/api/agents/:id/logs', async (req, res) => {
   const { id } = req.params;
-  const logPath = path.join(getAgentDataDir(id), 'watch.log');
-  const lines = parseInt(req.query.lines) || 50;
-
   try {
-    const content = await fs.readFile(logPath, 'utf8');
-    const allLines = content.split('\n');
-    const lastLines = allLines.slice(-lines);
-    res.json({ logs: lastLines });
+    await handleAgentLogs(req, res, id);
   } catch (e) {
-    res.json({ logs: [] });
+    res.status(500).json({ error: e.message });
   }
 });
 
@@ -573,30 +628,8 @@ app.get('/api/agents/:id/messages-dates', (req, res) => {
 // GET /api/agents/:id/artifact/:level/:index/messages - drill-down
 app.get('/api/agents/:id/artifact/:level/:index/messages', (req, res) => {
   const { id, level, index } = req.params;
-  const levelNum = parseInt(level);
-  const indexNum = parseInt(index);
-
   try {
-    const s = store.loadStore(id);
-    const levelArtifacts = s.artifacts?.[String(levelNum)] || [];
-
-    if (indexNum < 0 || indexNum >= levelArtifacts.length) {
-      return res.status(404).json({ error: 'Artifact not found' });
-    }
-
-    const artifact = levelArtifacts[indexNum];
-
-    if (levelNum === 1) {
-      const messages = store.getArchivedMessages(id, artifact.startTimestamp, artifact.endTimestamp);
-      res.json({ artifact, messages, source: 'archive' });
-    } else {
-      const sourceLevel = levelNum - 1;
-      const sourceArtifacts = (s.artifacts?.[String(sourceLevel)] || []).filter(a =>
-        new Date(a.endTimestamp) >= new Date(artifact.startTimestamp) &&
-        new Date(a.startTimestamp) <= new Date(artifact.endTimestamp)
-      );
-      res.json({ artifact, sourceArtifacts, source: `L${sourceLevel}` });
-    }
+    handleArtifactDrilldown(res, id, level, index);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -607,28 +640,12 @@ app.get('/api/agents/:id/artifact/:level/:index/messages', (req, res) => {
 // ============================================================
 
 app.get('/api/status', (req, res) => {
-  const status = getWatcherStatus('main');
-  res.json({ ...status, agentId: 'main', sessionId: null });
+  handleAgentStatus(res, 'main', { includeLegacySession: true });
 });
 
-app.get('/api/stats', (req, res) => {
+app.get('/api/stats', async (req, res) => {
   try {
-    const s = store.loadStore('main');
-    const config = store.loadConfig();
-    const threshold = config.thresholds?.L1 || 60;
-    const unsummarized = s.messages?.length || 0;
-
-    res.json({
-      messagesCount: unsummarized,
-      artifacts: {
-        L1: (s.artifacts?.[1] || []).length,
-        L2: (s.artifacts?.[2] || []).length,
-        L3: (s.artifacts?.[3] || []).length
-      },
-      threshold,
-      unsummarized,
-      progress: Math.min(1, unsummarized / threshold)
-    });
+    await handleAgentStats(res, 'main', { legacy: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -636,70 +653,32 @@ app.get('/api/stats', (req, res) => {
 
 app.get('/api/store', (req, res) => {
   try {
-    const s = store.loadStore('main');
-    const recentMessages = (s.messages || []).slice(-20);
-    res.json({
-      artifacts: {
-        L1: s.artifacts?.[1] || [],
-        L2: s.artifacts?.[2] || [],
-        L3: s.artifacts?.[3] || []
-      },
-      recentMessages
-    });
+    handleAgentStore(res, 'main');
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
 app.get('/api/context', async (req, res) => {
-  const contextPath = path.join(getAgentDataDir('main'), 'CONTEXT.md');
   try {
-    const content = await fs.readFile(contextPath, 'utf8');
-    const sections = parseContextSections(content);
-    res.json({ content, sections });
+    await handleAgentContext(res, 'main');
   } catch (e) {
-    res.json({ content: '', sections: [] });
+    res.status(500).json({ error: e.message });
   }
 });
 
 app.get('/api/logs', async (req, res) => {
-  const logPath = path.join(getAgentDataDir('main'), 'watch.log');
-  const lines = parseInt(req.query.lines) || 50;
   try {
-    const content = await fs.readFile(logPath, 'utf8');
-    const allLines = content.split('\n');
-    res.json({ logs: allLines.slice(-lines) });
+    await handleAgentLogs(req, res, 'main');
   } catch (e) {
-    res.json({ logs: [] });
+    res.status(500).json({ error: e.message });
   }
 });
 
 app.get('/api/artifact/:level/:index/messages', (req, res) => {
-  const { level, index } = req.params;
-  const levelNum = parseInt(level);
-  const indexNum = parseInt(index);
-
   try {
-    const s = store.loadStore('main');
-    const levelArtifacts = s.artifacts?.[String(levelNum)] || [];
-
-    if (indexNum < 0 || indexNum >= levelArtifacts.length) {
-      return res.status(404).json({ error: 'Artifact not found' });
-    }
-
-    const artifact = levelArtifacts[indexNum];
-
-    if (levelNum === 1) {
-      const messages = store.getArchivedMessages('main', artifact.startTimestamp, artifact.endTimestamp);
-      res.json({ artifact, messages, source: 'archive' });
-    } else {
-      const sourceLevel = levelNum - 1;
-      const sourceArtifacts = (s.artifacts?.[String(sourceLevel)] || []).filter(a =>
-        new Date(a.endTimestamp) >= new Date(artifact.startTimestamp) &&
-        new Date(a.startTimestamp) <= new Date(artifact.endTimestamp)
-      );
-      res.json({ artifact, sourceArtifacts, source: `L${sourceLevel}` });
-    }
+    const { level, index } = req.params;
+    handleArtifactDrilldown(res, 'main', level, index);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
