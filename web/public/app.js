@@ -2,7 +2,7 @@ function dashboard() {
   return {
     // State
     agents: [],
-    selectedAgent: 'main',
+    selectedAgent: '',
     currentAgentStatus: { running: false },
     stats: { messagesCount: 0, artifacts: { L1: 0, L2: 0, L3: 0 }, threshold: 60, unsummarized: 0, progress: 0, sessionMessageCount: 0, compactThreshold: 150, compactProgress: 0 },
     artifacts: { L1: [], L2: [], L3: [] },
@@ -16,6 +16,11 @@ function dashboard() {
     newAgentName: '',
     newAgentIsSubagent: false,
     availableAgents: [],
+    sessionSyncInProgress: false,
+    sessionSyncMessage: '',
+    contextRebuildInProgress: false,
+    contextRebuildMessage: '',
+    sessionInfo: { sessionId: null, sessionKey: null, source: null, jsonlPath: null },
     ws: null,
     refreshInterval: null,
     drilldownModal: {
@@ -50,7 +55,7 @@ function dashboard() {
         if (this.selectedAgent) {
           this.loadAgentData();
         }
-      }, 3000);
+      }, 20000);
     },
     
     async loadAvailableAgents() {
@@ -75,10 +80,14 @@ function dashboard() {
           this.currentAgentStatus = { running: current.running, pid: current.pid, uptime: current.uptime };
         }
         
-        // If no agent selected but agents exist, select first
-        if (!this.selectedAgent && this.agents.length > 0) {
+        // Ensure selected agent exists in the current list.
+        // This matters for snapshot/demo mode where "main" may not be present.
+        const selectedExists = this.agents.some(a => a.id === this.selectedAgent);
+        if ((!this.selectedAgent || !selectedExists) && this.agents.length > 0) {
           this.selectedAgent = this.agents[0].id;
           this.loadAgentData();
+          this.loadAgentConfig();
+          this.loadMessageDates();
         }
       } catch (e) {
         console.error('Failed to load agents:', e);
@@ -87,15 +96,17 @@ function dashboard() {
     
     async switchAgent() {
       this.expanded = {};
-      this.loadAgentData();
-      this.loadAgentConfig();
-      this.loadMessageDates();
+      this.logs = [];
+      await Promise.all([
+        this.loadAgentData(),
+        this.loadAgentConfig(),
+        this.loadMessageDates()
+      ]);
       
       // Switch WebSocket to new agent
       if (this.ws && this.ws.readyState === 1) {
         this.ws.send(JSON.stringify({ agentId: this.selectedAgent }));
       }
-      this.logs = [];
     },
     
     async loadAgentData() {
@@ -106,7 +117,8 @@ function dashboard() {
         this.loadArtifacts(),
         this.loadContext(),
         this.loadMessages(),
-        this.loadLogs()
+        this.loadLogs(),
+        this.loadSessionInfo()
       ]);
     },
     
@@ -165,6 +177,26 @@ function dashboard() {
         console.error('Failed to load agent config:', e);
       }
     },
+
+    async loadSessionInfo() {
+      if (!this.selectedAgent) return;
+      try {
+        const response = await fetch(`/api/agents/${this.selectedAgent}/session/active`);
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.error || `HTTP ${response.status}`);
+        }
+        this.sessionInfo = {
+          sessionId: data.sessionId || null,
+          sessionKey: data.sessionKey || null,
+          source: data.source || null,
+          jsonlPath: data.jsonlPath || null
+        };
+      } catch (e) {
+        this.sessionInfo = { sessionId: null, sessionKey: null, source: null, jsonlPath: null };
+        console.error('Failed to load session info:', e);
+      }
+    },
     
     async saveAgentConfig() {
       if (!this.selectedAgent) return;
@@ -196,6 +228,65 @@ function dashboard() {
         await this.loadAgents();
       } catch (e) {
         console.error('Toggle failed:', e);
+      }
+    },
+
+    async syncSessionFromGateway() {
+      if (!this.selectedAgent || this.sessionSyncInProgress) return;
+      this.sessionSyncInProgress = true;
+      this.sessionSyncMessage = '';
+
+      try {
+        const response = await fetch(`/api/agents/${this.selectedAgent}/session/sync`, {
+          method: 'POST'
+        });
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+          throw new Error(data.error || `HTTP ${response.status}`);
+        }
+
+        this.sessionSyncMessage = `Synced: ${data.session?.sessionId || 'unknown session'}`;
+        await Promise.all([
+          this.loadAgents(),
+          this.loadAgentData(),
+          this.loadSessionInfo()
+        ]);
+      } catch (e) {
+        console.error('Session sync failed:', e);
+        this.sessionSyncMessage = `Sync failed: ${e.message}`;
+      } finally {
+        this.sessionSyncInProgress = false;
+        setTimeout(() => {
+          this.sessionSyncMessage = '';
+        }, 6000);
+      }
+    },
+
+    async rebuildContext() {
+      if (!this.selectedAgent || this.contextRebuildInProgress) return;
+      this.contextRebuildInProgress = true;
+      this.contextRebuildMessage = '';
+
+      try {
+        const response = await fetch(`/api/agents/${this.selectedAgent}/context/rebuild`, {
+          method: 'POST'
+        });
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+          throw new Error(data.error || `HTTP ${response.status}`);
+        }
+
+        this.contextSections = data.sections || [];
+        this.activeTab = 'context';
+        this.contextRebuildMessage = 'Context rebuilt successfully';
+      } catch (e) {
+        console.error('Context rebuild failed:', e);
+        this.contextRebuildMessage = `Rebuild failed: ${e.message}`;
+      } finally {
+        this.contextRebuildInProgress = false;
+        setTimeout(() => {
+          this.contextRebuildMessage = '';
+        }, 6000);
       }
     },
     

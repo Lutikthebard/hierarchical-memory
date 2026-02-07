@@ -1,6 +1,6 @@
 const express = require('express');
 const { WebSocketServer } = require('ws');
-const { spawn, exec } = require('child_process');
+const { spawn, exec, execFile } = require('child_process');
 const { promisify } = require('util');
 const fs = require('fs').promises;
 const fsSync = require('fs');
@@ -9,16 +9,20 @@ const path = require('path');
 // Import store API
 const store = require('../scripts/store');
 const { extractContent } = require('../scripts/message-parser');
+const { OpenClawClient } = require('../scripts/gateway-client');
+const { resolveActiveSession, createGatewaySessionLister } = require('../scripts/session-resolver');
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 const app = express();
-const PORT = 3458;
+const PORT = parseInt(process.env.PORT || '3458', 10);
 
 // Paths
 const BASE_DIR = path.join(__dirname, '..');
 const SCRIPTS_DIR = path.join(BASE_DIR, 'scripts');
-const AGENTS_CONFIG_PATH = path.join(BASE_DIR, 'agents.json');
-const OPENCLAW_AGENTS_DIR = path.join(process.env.HOME, '.openclaw', 'agents');
+const AGENTS_CONFIG_PATH = process.env.HM_AGENTS_CONFIG_PATH || path.join(BASE_DIR, 'agents.json');
+const OPENCLAW_AGENTS_DIR = process.env.OPENCLAW_AGENTS_DIR || path.join(process.env.HOME, '.openclaw', 'agents');
+const listGatewaySessions = createGatewaySessionLister(() => new OpenClawClient());
 
 // Process Manager - tracks running watchers
 const runningWatchers = new Map(); // agentId -> { process, pid, startTime }
@@ -47,7 +51,7 @@ function saveAgentsConfig(config) {
 }
 
 function getAgentDataDir(agentId) {
-  return path.join(BASE_DIR, 'data', agentId);
+  return path.join(store.getDataDir(), agentId);
 }
 
 function ensureAgentDataDir(agentId) {
@@ -56,6 +60,22 @@ function ensureAgentDataDir(agentId) {
     fsSync.mkdirSync(dir, { recursive: true });
   }
   return dir;
+}
+
+function getLastSessionBindingPath(agentId) {
+  return path.join(getAgentDataDir(agentId), 'last-session.json');
+}
+
+function saveLastSessionBinding(agentId, binding = {}) {
+  ensureAgentDataDir(agentId);
+  const payload = {
+    sessionId: binding.sessionId || null,
+    sessionKey: binding.sessionKey || null,
+    jsonlPath: binding.jsonlPath || null,
+    timestamp: Date.now()
+  };
+  fsSync.writeFileSync(getLastSessionBindingPath(agentId), JSON.stringify(payload, null, 2));
+  return payload;
 }
 
 // ============================================================
@@ -272,6 +292,102 @@ app.post('/api/agents/:id/disable', (req, res) => {
   res.json({ success: true, ...result });
 });
 
+// POST /api/agents/:id/session/sync - resolve active session via gateway and pin it
+app.post('/api/agents/:id/session/sync', async (req, res) => {
+  const { id } = req.params;
+  const config = loadAgentsConfig();
+  const agent = config.agents.find(a => a.id === id);
+  if (!agent) {
+    return res.status(404).json({ error: 'Agent not found' });
+  }
+
+  try {
+    const sessionInfo = await resolveActiveSession({
+      agentId: id,
+      isSubagent: agent.isSubagent || false,
+      openclawAgentsDir: OPENCLAW_AGENTS_DIR,
+      listSessions: listGatewaySessions,
+      logger: (msg) => console.log(`[session-sync] ${id}: ${msg}`)
+    });
+
+    if (!sessionInfo || sessionInfo.source !== 'gateway') {
+      return res.status(502).json({ error: 'Failed to resolve active session from gateway' });
+    }
+    if (!sessionInfo.sessionId || !sessionInfo.jsonlPath) {
+      return res.status(500).json({ error: 'Resolved session is incomplete' });
+    }
+
+    const binding = saveLastSessionBinding(id, sessionInfo);
+
+    // Keep file-mtime path in sync for non-subagent resolver behavior.
+    let touchedJsonl = false;
+    if (fsSync.existsSync(sessionInfo.jsonlPath)) {
+      const now = new Date();
+      try {
+        fsSync.utimesSync(sessionInfo.jsonlPath, now, now);
+        touchedJsonl = true;
+      } catch (_e) {}
+    }
+
+    let watcherRestarted = false;
+    const wasRunning = runningWatchers.has(id);
+    if (wasRunning) {
+      stopWatcher(id);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const restartResult = startWatcher(id);
+      watcherRestarted = restartResult.success === true;
+      if (!watcherRestarted) {
+        return res.status(500).json({ error: `Session pinned but watcher restart failed: ${restartResult.message || 'unknown error'}` });
+      }
+    }
+
+    res.json({
+      success: true,
+      session: {
+        sessionId: sessionInfo.sessionId,
+        sessionKey: sessionInfo.sessionKey || null,
+        jsonlPath: sessionInfo.jsonlPath
+      },
+      source: sessionInfo.source,
+      binding,
+      watcherRestarted,
+      touchedJsonl
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/agents/:id/session/active - resolve active session for selected agent
+app.get('/api/agents/:id/session/active', async (req, res) => {
+  const { id } = req.params;
+  const config = loadAgentsConfig();
+  const agent = config.agents.find(a => a.id === id);
+  if (!agent) {
+    return res.status(404).json({ error: 'Agent not found' });
+  }
+
+  try {
+    const sessionInfo = await resolveActiveSession({
+      agentId: id,
+      isSubagent: agent.isSubagent || false,
+      openclawAgentsDir: OPENCLAW_AGENTS_DIR,
+      listSessions: listGatewaySessions,
+      logger: (msg) => console.log(`[session-active] ${id}: ${msg}`)
+    });
+
+    res.json({
+      agentId: id,
+      sessionId: sessionInfo?.sessionId || null,
+      sessionKey: sessionInfo?.sessionKey || null,
+      jsonlPath: sessionInfo?.jsonlPath || null,
+      source: sessionInfo?.source || null
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ============================================================
 // API: AGENT DATA (with agentId parameter)
 // ============================================================
@@ -286,53 +402,20 @@ app.get('/api/agents/:id/status', (req, res) => {
 // Helper: count messages in active JSONL session (with filters)
 async function getSessionMessageCount(agentId) {
   try {
-    // Check if agent is a subagent
     const config = loadAgentsConfig();
     const agent = config.agents.find(a => a.id === agentId);
     const isSubagentMode = agent?.isSubagent || false;
-    
-    // For subagents, use main agent's sessions directory
-    const effectiveAgentId = isSubagentMode ? 'main' : agentId;
-    const sessionsDir = path.join(OPENCLAW_AGENTS_DIR, effectiveAgentId, 'sessions');
-    if (!fsSync.existsSync(sessionsDir)) return 0;
-    
-    // Find most recent .jsonl file
-    let files = fsSync.readdirSync(sessionsDir)
-      .filter(f => f.endsWith('.jsonl'))
-      .map(f => ({
-        name: f,
-        path: path.join(sessionsDir, f),
-        mtime: fsSync.statSync(path.join(sessionsDir, f)).mtime
-      }));
-    
-    // For subagents, filter by session key pattern
-    if (isSubagentMode) {
-      files = files.filter(file => {
-        try {
-          const content = fsSync.readFileSync(file.path, 'utf8');
-          const firstLine = content.split('\n')[0];
-          if (!firstLine) return false;
-          
-          const data = JSON.parse(firstLine);
-          const sessionKey = data.sessionKey || data.key;
-          if (!sessionKey) return false;
-          
-          // Check if session key matches subagent pattern
-          const parts = sessionKey.split(':');
-          return parts[0] === 'agent' && 
-                 parts[1] === 'main' && 
-                 parts[2] === 'subagent' && 
-                 parts[3] === agentId;
-        } catch (e) {
-          return false;
-        }
-      });
-    }
-    
-    files.sort((a, b) => b.mtime - a.mtime);
-    if (files.length === 0) return 0;
-    
-    const jsonlPath = files[0].path;
+
+    const sessionInfo = await resolveActiveSession({
+      agentId,
+      isSubagent: isSubagentMode,
+      openclawAgentsDir: OPENCLAW_AGENTS_DIR,
+      listSessions: isSubagentMode ? listGatewaySessions : null,
+      logger: (msg) => console.log(`[session-resolver] ${agentId}: ${msg}`)
+    });
+    const jsonlPath = sessionInfo?.jsonlPath;
+    if (!jsonlPath || !fsSync.existsSync(jsonlPath)) return 0;
+
     const content = await fs.readFile(jsonlPath, 'utf8');
     const lines = content.split('\n').filter(l => l.trim());
     
@@ -536,6 +619,37 @@ app.get('/api/agents/:id/context', async (req, res) => {
   const { id } = req.params;
   try {
     await handleAgentContext(res, id);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/agents/:id/context/rebuild - regenerate CONTEXT.md for agent
+app.post('/api/agents/:id/context/rebuild', async (req, res) => {
+  const { id } = req.params;
+  const config = loadAgentsConfig();
+  const agent = config.agents.find(a => a.id === id);
+  if (!agent) {
+    return res.status(404).json({ error: 'Agent not found' });
+  }
+
+  try {
+    ensureAgentDataDir(id);
+    const contextPath = path.join(getAgentDataDir(id), 'CONTEXT.md');
+    const contextScript = path.join(SCRIPTS_DIR, 'context.js');
+
+    await execFileAsync('node', [contextScript, 'generate', id, '--output', contextPath], {
+      cwd: SCRIPTS_DIR
+    });
+
+    const content = await fs.readFile(contextPath, 'utf8');
+    const sections = parseContextSections(content);
+    res.json({
+      success: true,
+      contextPath,
+      sections,
+      generatedAt: new Date().toISOString()
+    });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -752,8 +866,13 @@ const wss = new WebSocketServer({ server, path: '/ws/logs' });
 wss.on('connection', (ws, req) => {
   console.log('WebSocket client connected');
   
-  // Default to main agent, can be changed via message
-  let agentId = 'main';
+  // Default to first configured agent in multi-agent/demo mode.
+  const initialAgentId = (() => {
+    const config = loadAgentsConfig();
+    const first = Array.isArray(config.agents) && config.agents[0] ? config.agents[0].id : null;
+    return first || 'main';
+  })();
+  let agentId = initialAgentId;
   let tail = null;
 
   function startTail(id) {
@@ -762,6 +881,7 @@ wss.on('connection', (ws, req) => {
     }
     
     const logPath = path.join(getAgentDataDir(id), 'watch.log');
+    fsSync.mkdirSync(path.dirname(logPath), { recursive: true });
     if (!fsSync.existsSync(logPath)) {
       fsSync.writeFileSync(logPath, '');
     }
