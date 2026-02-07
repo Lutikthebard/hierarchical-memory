@@ -413,12 +413,13 @@ async function getSessionMessageCount(agentId) {
     const config = loadAgentsConfig();
     const agent = config.agents.find(a => a.id === agentId);
     const isSubagentMode = agent?.isSubagent || false;
+    const listSessions = isSubagentMode ? listGatewaySessions : null;
 
     const sessionInfo = await resolveActiveSession({
       agentId,
       isSubagent: isSubagentMode,
       openclawAgentsDir: OPENCLAW_AGENTS_DIR,
-      listSessions: listGatewaySessions,
+      listSessions,
       logger: (msg) => console.log(`[session-resolver] ${agentId}: ${msg}`)
     });
     console.log(

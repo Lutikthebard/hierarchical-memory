@@ -33,16 +33,49 @@ const { parseMessage, extractContent } = require('./message-parser');
 const { CompactController } = require('./compact-controller');
 const { createSummarizationOrchestrator } = require('./summarization-orchestrator');
 const { resolveActiveSession, createGatewaySessionLister } = require('./session-resolver');
+const { getAgentKind, getWatchSessionDirs, getLookupSessionDirs } = require('./session-policy');
 
 // Default paths
 const OPENCLAW_DIR = path.join(process.env.HOME, '.openclaw');
 const GATEWAY_URL = process.env.GATEWAY_URL ?? 'ws://127.0.0.1:18789';
-const AGENTS_CONFIG_PATH = path.join(__dirname, '..', 'agents.json');
+const AGENTS_CONFIG_PATH = process.env.HM_AGENTS_CONFIG_PATH || path.join(__dirname, '..', 'agents.json');
 
 // Global lock to prevent parallel summarizations
 let summarizationInProgress = false;
+let pendingThresholdCheck = false;
 
 const compactController = new CompactController();
+
+async function drainThresholdSummarization(agentId, storeRef, threshold) {
+  if (summarizationInProgress) {
+    pendingThresholdCheck = true;
+    return;
+  }
+
+  summarizationInProgress = true;
+  console.log(`🔒 Lock acquired for summarization`);
+
+  try {
+    while (true) {
+      pendingThresholdCheck = false;
+      const nextCheck = checkThreshold(storeRef.current, 0, threshold, agentId);
+      if (!nextCheck.needed) break;
+
+      const updatedStore = await onThresholdReached(agentId, storeRef.current, 0, nextCheck.items);
+      if (updatedStore) {
+        storeRef.current = updatedStore;
+      }
+
+      const followUp = checkThreshold(storeRef.current, 0, threshold, agentId);
+      if (!followUp.needed && !pendingThresholdCheck) break;
+    }
+  } catch (err) {
+    console.error('Error in onThresholdReached:', err);
+  } finally {
+    summarizationInProgress = false;
+    console.log(`🔓 Lock released`);
+  }
+}
 
 /**
  * Load agents.json configuration
@@ -72,14 +105,14 @@ function isSubagent(agentId) {
  * Subagents use main's sessions directory
  */
 function getSessionsDir(agentId) {
-  const effectiveAgentId = isSubagent(agentId) ? 'main' : agentId;
-  return path.join(OPENCLAW_DIR, 'agents', effectiveAgentId, 'sessions');
+  const kind = getAgentKind(agentId, isSubagent(agentId));
+  const dirs = getWatchSessionDirs(agentId, kind, path.join(OPENCLAW_DIR, 'agents'));
+  return dirs[0] || path.join(OPENCLAW_DIR, 'agents', agentId, 'sessions');
 }
 
 function getSessionDirsForAgent(agentId) {
-  const directDir = path.join(OPENCLAW_DIR, 'agents', agentId, 'sessions');
-  const mainDir = path.join(OPENCLAW_DIR, 'agents', 'main', 'sessions');
-  return isSubagent(agentId) ? [mainDir, directDir] : [directDir, mainDir];
+  const kind = getAgentKind(agentId, isSubagent(agentId));
+  return getWatchSessionDirs(agentId, kind, path.join(OPENCLAW_DIR, 'agents'));
 }
 
 function findSessionPathInDirs(sessionId, dirs) {
@@ -472,27 +505,13 @@ async function processLine(agentId, storeRef, line, options = {}) {
   if (!options.skipThresholdCheck) {
     const threshold = agentCfg.thresholds?.L1 || getThresholdForLevel(1);
     const check = checkThreshold(storeRef.current, 0, threshold, agentId);
-    
-    if (check.needed && !summarizationInProgress) {
-      // Set lock to prevent parallel summarizations
-      summarizationInProgress = true;
-      console.log(`🔒 Lock acquired for summarization`);
-      
-      try {
-        const updatedStore = await onThresholdReached(agentId, storeRef.current, 0, check.items);
-        if (updatedStore) {
-          storeRef.current = updatedStore; // Update reference
+    if (check.needed) {
+      if (summarizationInProgress) {
+        pendingThresholdCheck = true;
+        console.log(`⏭️  Threshold met while summarization in progress - queued`);
+      } else {
+        await drainThresholdSummarization(agentId, storeRef, threshold);
       }
-    } catch (err) {
-      console.error('Error in onThresholdReached:', err);
-    } finally {
-      // Always release lock
-      summarizationInProgress = false;
-      console.log(`🔓 Lock released`);
-    }
-    } else if (check.needed && summarizationInProgress) {
-      // Threshold met but summarization already in progress - skip
-      console.log(`⏭️  Threshold met but summarization already in progress - skipping`);
     }
   }  // end skipThresholdCheck
   
@@ -561,13 +580,21 @@ function watchFile(agentId, storeRef, jsonlPath, options = {}) {
     input: tail.stdout,
     crlfDelay: Infinity
   });
-  
-  rl.on('line', async (line) => {
-    // Check for compaction event (before processing)
-    checkForCompaction(line, agentId);
-    
-    // Process message normally
-    await processLine(agentId, storeRef, line, { verbose: true });
+
+  // Process tail lines sequentially to avoid threshold/summarization races.
+  let lineProcessing = Promise.resolve();
+  rl.on('line', (line) => {
+    lineProcessing = lineProcessing
+      .then(async () => {
+        // Check for compaction event (before processing)
+        checkForCompaction(line, agentId);
+
+        // Process message normally
+        await processLine(agentId, storeRef, line, { verbose: true });
+      })
+      .catch((err) => {
+        console.error('Error processing tailed line:', err?.message || err);
+      });
   });
   
   tail.stderr.on('data', (data) => {
@@ -627,7 +654,10 @@ async function switchToSession(agentId, newSessionId, storeRef, resolvedInfo = n
   if (!currentSessionKey) {
     // Best-effort refresh for session key consistency.
     try {
-      const resolved = await getActiveSessionInfo(agentId, { quiet: true });
+      const resolved = await getActiveSessionInfo(agentId, {
+        quiet: true,
+        listSessions: isSubagent(agentId) ? listGatewaySessions : null
+      });
       if (resolved.sessionId === newSessionId && resolved.sessionKey) {
         currentSessionKey = resolved.sessionKey;
       }
@@ -692,6 +722,7 @@ async function switchToSession(agentId, newSessionId, storeRef, resolvedInfo = n
  * Automatically switch to newer sessions when they appear
  */
 function watchSessionDirectory(agentId, storeRef) {
+  const subagent = isSubagent(agentId);
   const sessionDirs = getSessionDirsForAgent(agentId).filter((d, i, arr) => arr.indexOf(d) === i);
   const existingDirs = sessionDirs.filter((d) => fs.existsSync(d));
 
@@ -710,7 +741,10 @@ function watchSessionDirectory(agentId, storeRef) {
     
     checkTimeout = setTimeout(async () => {
       try {
-        const active = await getActiveSessionInfo(agentId, { quiet: true });
+        const active = await getActiveSessionInfo(agentId, {
+          quiet: true,
+          listSessions: subagent ? listGatewaySessions : null
+        });
 
         if (active.sessionId && active.sessionId !== currentSessionId) {
           console.log(`\n🔄 New session detected: ${active.sessionId}`);
@@ -765,10 +799,7 @@ async function getActiveSessionInfo(agentId, options = {}) {
   } catch (err) {
     if (!subagent) throw err;
     const pinned = loadLastSessionBinding(agentId);
-    const sessionDirs = [
-      path.join(openclawAgentsDir, 'main', 'sessions'),
-      path.join(openclawAgentsDir, agentId, 'sessions')
-    ];
+    const sessionDirs = getLookupSessionDirs(agentId, getAgentKind(agentId, subagent), openclawAgentsDir);
     const pinnedPath = pinned.jsonlPath && fs.existsSync(pinned.jsonlPath)
       ? pinned.jsonlPath
       : (pinned.sessionId ? findSessionPathInDirs(pinned.sessionId, sessionDirs) : null);
@@ -950,6 +981,22 @@ async function main() {
       console.log(`   Skipped: enabled=${autoCompact.enabled}, awaiting=${compactState.awaitingCompaction}`);
     }
   }, 1000);  // 1 second delay to let tail -F establish
+
+  // Safety net: periodic threshold sweep in case a line-event race skipped a trigger.
+  setInterval(async () => {
+    try {
+      const latestCfg = loadAgentConfig(agentId);
+      const threshold = latestCfg.thresholds?.L1 || getThresholdForLevel(1);
+      const check = checkThreshold(storeRef.current, 0, threshold, agentId);
+      if (check.needed && !summarizationInProgress) {
+        await drainThresholdSummarization(agentId, storeRef, threshold);
+      } else if (check.needed && summarizationInProgress) {
+        pendingThresholdCheck = true;
+      }
+    } catch (err) {
+      console.error(`Threshold sweep failed for ${agentId}:`, err.message);
+    }
+  }, 3000);
   
   // Watch sessions directory for new sessions (auto-switch on /new)
   watchSessionDirectory(agentId, storeRef);

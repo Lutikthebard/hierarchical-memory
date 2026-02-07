@@ -18,7 +18,7 @@ function touch(filePath, mtimeMs) {
 }
 
 describe('session resolver', () => {
-  it('ignores legacy main:subagent key by default to prevent switching to main session', () => {
+  it('does not use legacy main:subagent key', () => {
     const keys = getCandidateKeys('council-psychologist', true);
     const chosen = chooseGatewaySession([
       {
@@ -29,32 +29,6 @@ describe('session resolver', () => {
     ], keys);
 
     assert.equal(chosen, null);
-  });
-
-  it('can include legacy main:subagent key only when explicitly enabled', () => {
-    const prev = process.env.HM_ENABLE_LEGACY_SUBAGENT_KEY;
-    process.env.HM_ENABLE_LEGACY_SUBAGENT_KEY = '1';
-    try {
-      const keys = getCandidateKeys('council-psychologist', true);
-      const chosen = chooseGatewaySession([
-        {
-          key: 'agent:main:subagent:council-psychologist',
-          sessionId: 'legacy-session-id',
-          updatedAt: '2026-02-07T10:00:00.000Z'
-        }
-      ], keys);
-
-      assert.deepEqual(chosen, {
-        sessionKey: 'agent:main:subagent:council-psychologist',
-        sessionId: 'legacy-session-id'
-      });
-    } finally {
-      if (typeof prev === 'undefined') {
-        delete process.env.HM_ENABLE_LEGACY_SUBAGENT_KEY;
-      } else {
-        process.env.HM_ENABLE_LEGACY_SUBAGENT_KEY = prev;
-      }
-    }
   });
 
   it('prioritizes direct key over :main key for subagent', async () => {

@@ -2,6 +2,12 @@ const fs = require('fs');
 const path = require('path');
 
 const { OpenClawClient } = require('./gateway-client');
+const {
+  getAgentKind,
+  getGatewayCandidateKeys,
+  getLookupSessionDirs,
+  getFallbackSessionDirs
+} = require('./session-policy');
 
 function toEpoch(value) {
   if (typeof value === 'number') return value;
@@ -11,22 +17,7 @@ function toEpoch(value) {
 }
 
 function getCandidateKeys(agentId, isSubagent) {
-  const keys = isSubagent
-    ? [
-      // Subagents in production commonly use direct key without :main.
-      `agent:${agentId}`,
-      `agent:${agentId}:main`
-    ]
-    : [
-      `agent:${agentId}:main`,
-      `agent:${agentId}`
-    ];
-  // Legacy OpenClaw routing key may alias main session.
-  // Disabled by default to avoid subagent switching to main session on main activity.
-  if (isSubagent && process.env.HM_ENABLE_LEGACY_SUBAGENT_KEY === '1') {
-    keys.push(`agent:main:subagent:${agentId}`);
-  }
-  return keys;
+  return getGatewayCandidateKeys(agentId, getAgentKind(agentId, isSubagent));
 }
 
 function chooseGatewaySession(sessions, candidateKeys) {
@@ -47,22 +38,6 @@ function chooseGatewaySession(sessions, candidateKeys) {
     sessionKey: matched[0].key,
     sessionId: matched[0].sessionId
   };
-}
-
-function buildSessionDirsForLookup(agentId, isSubagent, openclawAgentsDir) {
-  const directDir = path.join(openclawAgentsDir, agentId, 'sessions');
-  const mainDir = path.join(openclawAgentsDir, 'main', 'sessions');
-  // For gateway-resolved sessionId, search both locations.
-  return isSubagent ? [mainDir, directDir] : [directDir, mainDir];
-}
-
-function buildSessionDirsForFallback(agentId, isSubagent, openclawAgentsDir) {
-  const directDir = path.join(openclawAgentsDir, agentId, 'sessions');
-  const mainDir = path.join(openclawAgentsDir, 'main', 'sessions');
-  if (isSubagent) return [mainDir, directDir];
-  if (agentId === 'main') return [mainDir];
-  // Non-main regular agents must not fall back to main sessions.
-  return [directDir];
 }
 
 function findSessionPathById(sessionId, sessionDirs) {
@@ -120,9 +95,14 @@ async function resolveActiveSession({
   listSessions = null,
   logger = () => {}
 }) {
-  const lookupDirs = buildSessionDirsForLookup(agentId, isSubagent, openclawAgentsDir);
-  const fallbackDirs = buildSessionDirsForFallback(agentId, isSubagent, openclawAgentsDir);
-  const candidateKeys = getCandidateKeys(agentId, isSubagent);
+  const kind = getAgentKind(agentId, isSubagent);
+  const lookupDirs = getLookupSessionDirs(agentId, kind, openclawAgentsDir);
+  const fallbackDirs = getFallbackSessionDirs(agentId, kind, openclawAgentsDir);
+  const candidateKeys = getGatewayCandidateKeys(agentId, kind);
+
+  if (kind === 'subagent' && typeof listSessions !== 'function') {
+    throw new Error(`Gateway lookup is required for subagent ${agentId}`);
+  }
 
   if (typeof listSessions === 'function') {
     try {
@@ -139,11 +119,11 @@ async function resolveActiveSession({
         }
         logger(`Gateway session found but JSONL missing: ${gatewayChoice.sessionId}`);
       }
-      if (isSubagent) {
+      if (kind === 'subagent') {
         throw new Error(`No gateway session found for subagent: ${agentId}`);
       }
     } catch (err) {
-      if (isSubagent) {
+      if (kind === 'subagent') {
         throw new Error(`Gateway lookup is required for subagent ${agentId}: ${err.message}`);
       }
       logger(`Gateway lookup failed (${err.message}), falling back to file mtime`);
