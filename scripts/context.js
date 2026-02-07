@@ -16,7 +16,16 @@
 
 const fs = require('fs');
 const path = require('path');
-const { loadStore, loadConfig, getDataDir, getArchivedMessages, getMessagesDir } = require('./store');
+const {
+    loadStore,
+    loadConfig,
+    loadAgentConfig,
+    DEFAULT_AGENT_CONFIG,
+    getDataDir,
+    getArchivedMessages,
+    getMessagesDir,
+    filterForContext
+} = require('./store');
 
 /**
  * Format timestamp for display
@@ -123,6 +132,9 @@ function generateContext(store, config, agentId) {
     const maxLevel = artifactLevels.length > 0 ? Math.max(...artifactLevels) : 0;
     const contextOverlap = config.contextOverlap || 1;
     const includeTimestamps = config.includeTimestamps !== false;
+    const agentConfig = agentId
+        ? loadAgentConfig(agentId)
+        : { filters: { ...(DEFAULT_AGENT_CONFIG.filters || {}) } };
 
     // Debug info
     context.push(`# Memory Context`);
@@ -188,29 +200,7 @@ function generateContext(store, config, agentId) {
 
         // Format section
         if (isMessageLevel) {
-            // Filter out system/technical messages
-            const filteredItems = recentItems.filter(msg => {
-                // Exclude memory task prompts
-                if (msg.role === 'user' && msg.content.includes('🧠 MEMORY TASK')) {
-                    return false;
-                }
-                // Exclude [SYSTEM: Create L1 Memory Artifact] prompts
-                if (msg.role === 'user' && msg.content.includes('[SYSTEM: Create L1 Memory Artifact]')) {
-                    return false;
-                }
-                // Exclude NO_REPLY responses
-                if (msg.role === 'assistant' && msg.content.trim() === 'NO_REPLY') {
-                    return false;
-                }
-                // Exclude JSON artifact responses
-                if (msg.role === 'assistant' && 
-                    msg.content.includes('"content":') && 
-                    msg.content.includes('"startTimestamp":') &&
-                    msg.content.includes('"endTimestamp":')) {
-                    return false;
-                }
-                return true;
-            });
+            const filteredItems = filterForContext(recentItems, agentConfig);
             
             // Skip section if no messages left after filtering
             if (filteredItems.length === 0) continue;

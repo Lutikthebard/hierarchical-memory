@@ -9,6 +9,14 @@ const path = require('path');
 // Import store API
 const store = require('../scripts/store');
 const { extractContent } = require('../scripts/message-parser');
+const {
+  MESSAGE_CLASSES,
+  normalizeText,
+  classifyMessage,
+  normalizeClassFilters,
+  commandAllowed,
+  isClassIncludedForTarget
+} = require('../scripts/message-classifier');
 const { OpenClawClient } = require('../scripts/gateway-client');
 const { resolveActiveSession, createGatewaySessionLister } = require('../scripts/session-resolver');
 
@@ -433,9 +441,11 @@ async function getSessionMessageCount(agentId) {
     
     // Load agent config for filters
     const agentConfig = store.loadAgentConfig(agentId);
-    const countRoles = agentConfig.filters?.countRoles || ['user', 'assistant'];
-    const excludePatterns = agentConfig.filters?.excludePatterns || [];
-    const exclude = agentConfig.filters?.exclude || [];
+    const filters = agentConfig.filters || {};
+    const classFilters = normalizeClassFilters(filters);
+    const countRoles = filters.countRoles || ['user', 'assistant'];
+    const excludePatterns = filters.excludePatterns || [];
+    const exclude = filters.exclude || [];
     
     // Find last compaction event - count only messages after it
     let lastCompactionIndex = -1;
@@ -467,9 +477,12 @@ async function getSessionMessageCount(agentId) {
         if (!countRoles.includes(role)) continue;
         
         // Extract content
-        const content = extractContent(msg.content);
-        
+        const content = normalizeText(extractContent(msg.content));
         if (!content) continue;
+        const messageClass = classifyMessage(role, content);
+
+        if (!isClassIncludedForTarget(messageClass, classFilters, 'count')) continue;
+        if (!commandAllowed(content, classFilters.commandAllowlist)) continue;
         
         // Apply exclude filters
         let excluded = false;
@@ -703,6 +716,32 @@ app.put('/api/agents/:id/config', (req, res) => {
     }
     if (config.filters && typeof config.filters !== 'object') {
       return res.status(400).json({ error: 'filters must be an object' });
+    }
+    if (config.filters) {
+      const filterArrayFields = [
+        'exclude',
+        'excludePatterns',
+        'countRoles',
+        'storeRoles',
+        'storeMessageClasses',
+        'countMessageClasses',
+        'contextMessageClasses',
+        'commandAllowlist'
+      ];
+      for (const field of filterArrayFields) {
+        if (Object.prototype.hasOwnProperty.call(config.filters, field) && !Array.isArray(config.filters[field])) {
+          return res.status(400).json({ error: `filters.${field} must be an array` });
+        }
+      }
+      const classFields = ['storeMessageClasses', 'countMessageClasses', 'contextMessageClasses'];
+      for (const field of classFields) {
+        const classes = config.filters[field];
+        if (!classes) continue;
+        const invalid = classes.filter((name) => !MESSAGE_CLASSES.includes(String(name)));
+        if (invalid.length > 0) {
+          return res.status(400).json({ error: `filters.${field} has invalid classes: ${invalid.join(', ')}` });
+        }
+      }
     }
     
     store.saveAgentConfig(id, config);

@@ -12,6 +12,14 @@
 
 const fs = require('fs');
 const path = require('path');
+const {
+  DEFAULT_CLASS_FILTERS,
+  classifyMessage,
+  normalizeText,
+  normalizeClassFilters,
+  commandAllowed,
+  isClassIncludedForTarget
+} = require('./message-classifier');
 
 const CONFIG_PATH = path.join(__dirname, '../config.json');
 
@@ -26,7 +34,8 @@ const DEFAULT_AGENT_CONFIG = {
     exclude: ["HEARTBEAT_OK", "NO_REPLY"],
     excludePatterns: [],
     countRoles: ["user", "assistant"],
-    storeRoles: ["user", "assistant"]
+    storeRoles: ["user", "assistant"],
+    ...DEFAULT_CLASS_FILTERS
   },
   autoInjectContext: {
     enabled: false,
@@ -99,6 +108,9 @@ function saveAgentConfig(agentId, config) {
  * Get data directory path
  */
 function getDataDir() {
+  if (process.env.HM_DATA_DIR) {
+    return path.resolve(process.env.HM_DATA_DIR);
+  }
   const config = loadConfig();
   return path.resolve(path.dirname(CONFIG_PATH), config.dataDir);
 }
@@ -203,7 +215,7 @@ function formatTimestamp(timestamp) {
  * Add message to L0
  * Timestamp is the unique identifier
  */
-function addMessage(store, { role, content, timestamp }) {
+function addMessage(store, { role, content, timestamp, messageClass }) {
   // Ensure timestamp is ISO string
   const ts = typeof timestamp === 'number' 
     ? new Date(timestamp).toISOString()
@@ -219,6 +231,9 @@ function addMessage(store, { role, content, timestamp }) {
     content,
     timestamp: ts
   };
+  if (messageClass) {
+    message.messageClass = messageClass;
+  }
   
   store.messages.push(message);
   return message;
@@ -330,7 +345,7 @@ function getUnsummarized(store, sourceLevel, agentId = null) {
 function filterForCounting(messages, agentConfig) {
   if (!agentConfig) return messages;
   
-  const filters = agentConfig.filters || {};
+  const filters = { ...(agentConfig.filters || {}), ...normalizeClassFilters(agentConfig.filters || {}) };
   const exclude = filters.exclude || [];
   const excludePatterns = filters.excludePatterns || [];
   const countRoles = filters.countRoles || ['user', 'assistant'];
@@ -339,7 +354,11 @@ function filterForCounting(messages, agentConfig) {
     // Check role
     if (!countRoles.includes(m.role)) return false;
     
-    const content = m.content || '';
+    const content = normalizeText(m.content || '');
+    if (!content) return false;
+    const messageClass = m.messageClass || classifyMessage(m.role, content);
+    if (!isClassIncludedForTarget(messageClass, filters, 'count')) return false;
+    if (!commandAllowed(content, filters.commandAllowlist || [])) return false;
     
     // Check exclude strings
     for (const ex of exclude) {
@@ -353,6 +372,38 @@ function filterForCounting(messages, agentConfig) {
       } catch (e) {}
     }
     
+    return true;
+  });
+}
+
+function filterForContext(messages, agentConfig) {
+  if (!agentConfig) return messages;
+
+  const filters = { ...(agentConfig.filters || {}), ...normalizeClassFilters(agentConfig.filters || {}) };
+  const exclude = filters.exclude || [];
+  const excludePatterns = filters.excludePatterns || [];
+  const storeRoles = filters.storeRoles || ['user', 'assistant'];
+
+  return messages.filter((m) => {
+    if (!storeRoles.includes(m.role)) return false;
+
+    const content = normalizeText(m.content || '');
+    if (!content) return false;
+
+    const messageClass = m.messageClass || classifyMessage(m.role, content);
+    if (!isClassIncludedForTarget(messageClass, filters, 'context')) return false;
+    if (!commandAllowed(content, filters.commandAllowlist || [])) return false;
+
+    for (const ex of exclude) {
+      if (content.includes(ex)) return false;
+    }
+
+    for (const pattern of excludePatterns) {
+      try {
+        if (new RegExp(pattern).test(content)) return false;
+      } catch (e) {}
+    }
+
     return true;
   });
 }
@@ -506,6 +557,7 @@ module.exports = {
   getUnsummarized,
   checkThreshold,
   filterForCounting,
+  filterForContext,
   getLastSummarizedTimestamp,
   getThresholdForLevel,
   loadConfig,

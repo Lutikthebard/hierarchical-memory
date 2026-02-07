@@ -123,6 +123,37 @@ describe('watch.js', () => {
       const msg = parseMessage(line);
       assert.equal(msg.content, 'Multi-part content');
     });
+
+    it('filters commands by class defaults', () => {
+      const line = JSON.stringify({
+        type: 'message',
+        message: { role: 'user', content: '/status', timestamp: '2026-01-01T10:00:00Z' }
+      });
+      assert.equal(parseMessage(line), null);
+    });
+
+    it('accepts allowlisted commands when command class is enabled for store', () => {
+      const line = JSON.stringify({
+        type: 'message',
+        message: { role: 'user', content: '/status', timestamp: '2026-01-01T10:00:00Z' }
+      });
+      const config = {
+        filters: {
+          exclude: [],
+          excludePatterns: [],
+          countRoles: ['user', 'assistant'],
+          storeRoles: ['user', 'assistant'],
+          storeMessageClasses: ['dialogue', 'command'],
+          countMessageClasses: ['dialogue', 'command'],
+          contextMessageClasses: ['dialogue'],
+          commandAllowlist: ['/status']
+        }
+      };
+      const msg = parseMessage(line, config);
+      assert.equal(msg.content, '/status');
+      assert.equal(msg.messageClass, 'command');
+      assert.equal(msg.shouldCount, true);
+    });
   });
 
   describe('processLine', () => {
@@ -229,6 +260,108 @@ describe('watch.js', () => {
         );
         assert.equal(updatedBinding.sessionId, recoveredSessionId);
         assert.equal(updatedBinding.sessionKey, `agent:${agentId}`);
+      } finally {
+        if (typeof prevDataDir === 'undefined') {
+          delete process.env.HM_DATA_DIR;
+        } else {
+          process.env.HM_DATA_DIR = prevDataDir;
+        }
+      }
+    });
+
+    it('does not adopt newer main session file when gateway is unavailable', async () => {
+      const prevDataDir = process.env.HM_DATA_DIR;
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hm-watch-main-mtime-'));
+      const dataDir = path.join(tmp, 'data');
+      const agentsDir = path.join(tmp, 'openclaw', 'agents');
+      const agentId = 'council-psychologist';
+      process.env.HM_DATA_DIR = dataDir;
+
+      try {
+        const pinnedSessionId = 'subagent-owned-session';
+        const pinnedPath = path.join(agentsDir, agentId, 'sessions', `${pinnedSessionId}.jsonl`);
+        fs.mkdirSync(path.dirname(pinnedPath), { recursive: true });
+        fs.writeFileSync(pinnedPath, '', 'utf8');
+
+        fs.mkdirSync(path.join(dataDir, agentId), { recursive: true });
+        fs.writeFileSync(
+          path.join(dataDir, agentId, 'last-session.json'),
+          JSON.stringify({
+            sessionId: pinnedSessionId,
+            sessionKey: `agent:${agentId}`,
+            jsonlPath: pinnedPath,
+            timestamp: Date.now()
+          }),
+          'utf8'
+        );
+
+        const mainSessionId = 'main-fresh-session';
+        const mainPath = path.join(agentsDir, 'main', 'sessions', `${mainSessionId}.jsonl`);
+        fs.mkdirSync(path.dirname(mainPath), { recursive: true });
+        fs.writeFileSync(mainPath, '', 'utf8');
+
+        // Emulate "main received message" -> main session file mtime changes.
+        const now = new Date();
+        fs.utimesSync(mainPath, now, now);
+
+        const info = await getActiveSessionInfo(agentId, {
+          quiet: true,
+          openclawAgentsDir: agentsDir,
+          listSessions: async () => {
+            throw new Error('gateway unavailable');
+          }
+        });
+
+        assert.equal(info.source, 'pinned-cache');
+        assert.equal(info.sessionId, pinnedSessionId);
+        assert.equal(info.sessionKey, `agent:${agentId}`);
+        assert.equal(info.jsonlPath, pinnedPath);
+      } finally {
+        if (typeof prevDataDir === 'undefined') {
+          delete process.env.HM_DATA_DIR;
+        } else {
+          process.env.HM_DATA_DIR = prevDataDir;
+        }
+      }
+    });
+
+    it('keeps subagent gateway session even when main session file has newer mtime', async () => {
+      const prevDataDir = process.env.HM_DATA_DIR;
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hm-watch-main-mtime-gw-'));
+      const dataDir = path.join(tmp, 'data');
+      const agentsDir = path.join(tmp, 'openclaw', 'agents');
+      const agentId = 'council-psychologist';
+      process.env.HM_DATA_DIR = dataDir;
+
+      try {
+        const subSessionId = 'subagent-gateway-session';
+        const subPath = path.join(agentsDir, 'main', 'sessions', `${subSessionId}.jsonl`);
+        fs.mkdirSync(path.dirname(subPath), { recursive: true });
+        fs.writeFileSync(subPath, '', 'utf8');
+
+        const mainSessionId = 'main-newer-session';
+        const mainPath = path.join(agentsDir, 'main', 'sessions', `${mainSessionId}.jsonl`);
+        fs.writeFileSync(mainPath, '', 'utf8');
+
+        // Emulate "main received message" -> main file becomes newer.
+        const now = new Date();
+        fs.utimesSync(mainPath, now, now);
+        const older = new Date(now.getTime() - 60000);
+        fs.utimesSync(subPath, older, older);
+
+        const info = await getActiveSessionInfo(agentId, {
+          quiet: true,
+          openclawAgentsDir: agentsDir,
+          listSessions: async () => ([
+            { key: 'agent:main:main', sessionId: mainSessionId, updatedAt: now.toISOString() },
+            { key: `agent:${agentId}`, sessionId: subSessionId, updatedAt: older.toISOString() }
+          ])
+        });
+
+        assert.equal(info.source, 'gateway');
+        assert.equal(info.sessionId, subSessionId);
+        assert.equal(info.sessionKey, `agent:${agentId}`);
+        assert.equal(info.jsonlPath, subPath);
       } finally {
         if (typeof prevDataDir === 'undefined') {
           delete process.env.HM_DATA_DIR;

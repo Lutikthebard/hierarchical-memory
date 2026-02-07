@@ -1,3 +1,12 @@
+const {
+  DEFAULT_CLASS_FILTERS,
+  classifyMessage,
+  normalizeText,
+  normalizeClassFilters,
+  commandAllowed,
+  isClassIncludedForTarget
+} = require('./message-classifier');
+
 /**
  * Shared JSONL message parser for watchers and related services.
  */
@@ -20,12 +29,18 @@ function extractContent(content) {
 function parseMessage(line, agentConfig = null) {
   if (!line || !line.trim()) return null;
 
-  const filters = agentConfig?.filters || {
+  const defaultFilters = {
     exclude: ['HEARTBEAT_OK', 'NO_REPLY'],
     excludePatterns: [],
     countRoles: ['user', 'assistant'],
-    storeRoles: ['user', 'assistant']
+    storeRoles: ['user', 'assistant'],
+    ...DEFAULT_CLASS_FILTERS
   };
+  const filters = {
+    ...defaultFilters,
+    ...(agentConfig?.filters || {})
+  };
+  const classFilters = normalizeClassFilters(filters);
 
   try {
     const data = JSON.parse(line);
@@ -35,12 +50,12 @@ function parseMessage(line, agentConfig = null) {
     const role = msg.role;
     if (!filters.storeRoles.includes(role)) return null;
 
-    const content = extractContent(msg.content);
+    const content = normalizeText(extractContent(msg.content));
     if (!content) return null;
 
-    // Always exclude memory-system internals from store stream
-    if (content.includes('🧠 MEMORY TASK:') || content.includes('MEMORY TASK:')) return null;
-    if (content.includes('<memory_artifact>')) return null;
+    const messageClass = classifyMessage(role, content);
+    if (!isClassIncludedForTarget(messageClass, classFilters, 'store')) return null;
+    if (!commandAllowed(content, classFilters.commandAllowlist)) return null;
 
     for (const excludeStr of filters.exclude) {
       if (content.includes(excludeStr)) return null;
@@ -63,7 +78,10 @@ function parseMessage(line, agentConfig = null) {
       role,
       content,
       timestamp: ts,
-      shouldCount: filters.countRoles.includes(role)
+      messageClass,
+      shouldCount: filters.countRoles.includes(role) &&
+        isClassIncludedForTarget(messageClass, classFilters, 'count') &&
+        commandAllowed(content, classFilters.commandAllowlist)
     };
   } catch (_e) {
     return null;

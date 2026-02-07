@@ -358,6 +358,55 @@
                          class="w-full border rounded px-2 py-1 text-sm font-mono">
                 </div>
               </div>
+
+              <div class="pt-2 border-t">
+                <label class="text-xs text-gray-600">Message Classes by Destination</label>
+                <div class="overflow-x-auto mt-1">
+                  <table class="w-full text-xs border rounded">
+                    <thead class="bg-gray-50">
+                      <tr>
+                        <th class="text-left p-2 border-b">Class</th>
+                        <th class="text-center p-2 border-b">Store</th>
+                        <th class="text-center p-2 border-b">Counter</th>
+                        <th class="text-center p-2 border-b">Context</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <template x-for="cls in messageClassOptions" :key="'class-' + cls.key">
+                        <tr>
+                          <td class="p-2 border-b" x-text="cls.label"></td>
+                          <td class="text-center p-2 border-b">
+                            <input type="checkbox"
+                                   :checked="classEnabled('store', cls.key)"
+                                   @change="toggleClass('store', cls.key, $event.target.checked)"
+                                   class="rounded">
+                          </td>
+                          <td class="text-center p-2 border-b">
+                            <input type="checkbox"
+                                   :checked="classEnabled('count', cls.key)"
+                                   @change="toggleClass('count', cls.key, $event.target.checked)"
+                                   class="rounded">
+                          </td>
+                          <td class="text-center p-2 border-b">
+                            <input type="checkbox"
+                                   :checked="classEnabled('context', cls.key)"
+                                   @change="toggleClass('context', cls.key, $event.target.checked)"
+                                   class="rounded">
+                          </td>
+                        </tr>
+                      </template>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div>
+                <label class="text-xs text-gray-600">Allowed Commands (comma-separated, optional)</label>
+                <input type="text" :value="agentConfig.filters.commandAllowlist.join(', ')"
+                       @change="agentConfig.filters.commandAllowlist = $event.target.value.split(',').map(s => s.trim()).filter(s => s)"
+                       class="w-full border rounded px-2 py-1 text-sm font-mono"
+                       placeholder="/status, /help">
+              </div>
             </div>
           </div>
           

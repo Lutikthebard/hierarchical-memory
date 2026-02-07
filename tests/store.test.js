@@ -192,5 +192,43 @@ describe('store.js', () => {
       const result = filterForCounting(messages, config);
       assert.equal(result.length, 1);
     });
+
+    it('filters by countMessageClasses', () => {
+      const messages = [
+        { role: 'user', content: '/status please', messageClass: 'command' },
+        { role: 'assistant', content: 'normal answer', messageClass: 'dialogue' }
+      ];
+      const config = {
+        filters: {
+          countRoles: ['user', 'assistant'],
+          exclude: [],
+          excludePatterns: [],
+          countMessageClasses: ['dialogue'],
+          commandAllowlist: ['/status']
+        }
+      };
+      const result = filterForCounting(messages, config);
+      assert.equal(result.length, 1);
+      assert.equal(result[0].content, 'normal answer');
+    });
+
+    it('respects command allowlist when command class is enabled for counting', () => {
+      const messages = [
+        { role: 'user', content: '/status', messageClass: 'command' },
+        { role: 'user', content: '/compact now', messageClass: 'command' }
+      ];
+      const config = {
+        filters: {
+          countRoles: ['user', 'assistant'],
+          exclude: [],
+          excludePatterns: [],
+          countMessageClasses: ['command'],
+          commandAllowlist: ['/status']
+        }
+      };
+      const result = filterForCounting(messages, config);
+      assert.equal(result.length, 1);
+      assert.equal(result[0].content, '/status');
+    });
   });
 });

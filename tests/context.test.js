@@ -106,5 +106,17 @@ describe('context.js', () => {
       const context = generateContext(store, config);
       assert.ok(context.includes('# Memory Context'));
     });
+
+    it('does not include command messages in context by default', () => {
+      const store = createEmptyStore();
+      addMessage(store, { role: 'user', content: '/status', timestamp: '2026-01-01T10:00:00.000Z' });
+      addMessage(store, { role: 'assistant', content: 'Regular reply', timestamp: '2026-01-01T10:01:00.000Z' });
+
+      const config = { contextOverlap: 1, includeTimestamps: true };
+      const context = generateContext(store, config);
+
+      assert.ok(context.includes('Regular reply'));
+      assert.ok(!context.includes('/status'));
+    });
   });
 });

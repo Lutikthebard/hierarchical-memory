@@ -1,4 +1,29 @@
 function dashboard() {
+  const messageClassOptions = [
+    { key: 'dialogue', label: 'Dialogue (agent/user/agent)' },
+    { key: 'heartbeat', label: 'Heartbeat messages' },
+    { key: 'command', label: 'Commands (/...)' },
+    { key: 'system_noise', label: 'System and technical noise' },
+    { key: 'memory_internal', label: 'Memory internals (tasks/inject/artifacts)' }
+  ];
+
+  const defaultClassFilters = {
+    storeMessageClasses: ['dialogue'],
+    countMessageClasses: ['dialogue'],
+    contextMessageClasses: ['dialogue'],
+    commandAllowlist: []
+  };
+
+  function normalizeClassFilterArrays(filters = {}) {
+    const out = { ...defaultClassFilters };
+    for (const key of Object.keys(defaultClassFilters)) {
+      if (Array.isArray(filters[key])) {
+        out[key] = filters[key].map((x) => String(x || '').trim()).filter(Boolean);
+      }
+    }
+    return out;
+  }
+
   return {
     // State
     agents: [],
@@ -35,10 +60,17 @@ function dashboard() {
     selectedMessageDate: '',
     archivedMessages: [],
     archivedMessagesLoading: false,
+    messageClassOptions,
     agentConfig: {
       thresholds: { L1: 60, default: 5 },
       prompts: { l1: '', aggregate: '' },
-      filters: { exclude: [], excludePatterns: [], countRoles: ['user', 'assistant'], storeRoles: ['user', 'assistant'] },
+      filters: {
+        exclude: [],
+        excludePatterns: [],
+        countRoles: ['user', 'assistant'],
+        storeRoles: ['user', 'assistant'],
+        ...defaultClassFilters
+      },
       autoInjectContext: { enabled: false, onNewSession: false, onCompaction: false },
       autoCompact: { enabled: false, messageThreshold: 150, retries: 5, retryDelayMs: 3000 }
     },
@@ -166,10 +198,18 @@ function dashboard() {
       try {
         const response = await fetch(`/api/agents/${this.selectedAgent}/config`);
         const data = await response.json();
+        const classFilters = normalizeClassFilterArrays(data.filters || {});
         this.agentConfig = {
           thresholds: data.thresholds || { L1: 60, default: 5 },
           prompts: data.prompts || { l1: '', aggregate: '' },
-          filters: data.filters || { exclude: [], excludePatterns: [], countRoles: ['user', 'assistant'], storeRoles: ['user', 'assistant'] },
+          filters: {
+            ...(data.filters || {}),
+            exclude: data.filters?.exclude || [],
+            excludePatterns: data.filters?.excludePatterns || [],
+            countRoles: data.filters?.countRoles || ['user', 'assistant'],
+            storeRoles: data.filters?.storeRoles || ['user', 'assistant'],
+            ...classFilters
+          },
           autoInjectContext: data.autoInjectContext || { enabled: false, onNewSession: false, onCompaction: false },
           autoCompact: data.autoCompact || { enabled: false, messageThreshold: 150, retries: 5, retryDelayMs: 3000 }
         };
@@ -201,6 +241,10 @@ function dashboard() {
     async saveAgentConfig() {
       if (!this.selectedAgent) return;
       try {
+        this.agentConfig.filters = {
+          ...(this.agentConfig.filters || {}),
+          ...normalizeClassFilterArrays(this.agentConfig.filters || {})
+        };
         const response = await fetch(`/api/agents/${this.selectedAgent}/config`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
@@ -400,6 +444,29 @@ function dashboard() {
       } finally {
         this.drilldownModal.loading = false;
       }
+    },
+
+    classFilterField(scope) {
+      if (scope === 'store') return 'storeMessageClasses';
+      if (scope === 'count') return 'countMessageClasses';
+      return 'contextMessageClasses';
+    },
+
+    classEnabled(scope, className) {
+      const field = this.classFilterField(scope);
+      const list = this.agentConfig.filters?.[field] || [];
+      return list.includes(className);
+    },
+
+    toggleClass(scope, className, checked) {
+      const field = this.classFilterField(scope);
+      if (!this.agentConfig.filters[field]) {
+        this.agentConfig.filters[field] = [];
+      }
+      const list = this.agentConfig.filters[field];
+      const idx = list.indexOf(className);
+      if (checked && idx === -1) list.push(className);
+      if (!checked && idx !== -1) list.splice(idx, 1);
     },
     
     toggle(key) {
