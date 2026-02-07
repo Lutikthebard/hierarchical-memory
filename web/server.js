@@ -312,6 +312,7 @@ app.post('/api/agents/:id/session/sync', async (req, res) => {
     });
 
     if (!sessionInfo || sessionInfo.source !== 'gateway') {
+      console.warn(`[session-sync] agent=${id} source=${sessionInfo?.source || 'none'} result=rejected`);
       return res.status(502).json({ error: 'Failed to resolve active session from gateway' });
     }
     if (!sessionInfo.sessionId || !sessionInfo.jsonlPath) {
@@ -319,6 +320,9 @@ app.post('/api/agents/:id/session/sync', async (req, res) => {
     }
 
     const binding = saveLastSessionBinding(id, sessionInfo);
+    console.log(
+      `[session-sync] agent=${id} source=${sessionInfo.source} sessionId=${sessionInfo.sessionId} sessionKey=${sessionInfo.sessionKey || 'N/A'}`
+    );
 
     // Keep file-mtime path in sync for non-subagent resolver behavior.
     let touchedJsonl = false;
@@ -376,6 +380,9 @@ app.get('/api/agents/:id/session/active', async (req, res) => {
       listSessions: listGatewaySessions,
       logger: (msg) => console.log(`[session-active] ${id}: ${msg}`)
     });
+    console.log(
+      `[session-active] agent=${id} source=${sessionInfo?.source || 'none'} sessionId=${sessionInfo?.sessionId || 'N/A'} sessionKey=${sessionInfo?.sessionKey || 'N/A'}`
+    );
 
     res.json({
       agentId: id,
@@ -414,6 +421,9 @@ async function getSessionMessageCount(agentId) {
       listSessions: listGatewaySessions,
       logger: (msg) => console.log(`[session-resolver] ${agentId}: ${msg}`)
     });
+    console.log(
+      `[session-count] agent=${agentId} source=${sessionInfo?.source || 'none'} sessionId=${sessionInfo?.sessionId || 'N/A'}`
+    );
     const jsonlPath = sessionInfo?.jsonlPath;
     if (!jsonlPath || !fsSync.existsSync(jsonlPath)) return 0;
 

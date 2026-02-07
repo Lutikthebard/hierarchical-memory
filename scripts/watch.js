@@ -618,6 +618,7 @@ async function switchToSession(agentId, newSessionId, storeRef, resolvedInfo = n
   // Update current session
   currentSessionId = newSessionId;
   currentSessionKey = resolvedInfo?.sessionKey || null;
+  const resolvedSource = resolvedInfo?.source || 'unknown';
   const sessionDirs = getSessionDirsForAgent(agentId);
   const fallbackPath = findSessionPathInDirs(newSessionId, sessionDirs);
   const newJsonlPath = resolvedInfo?.jsonlPath || fallbackPath || path.join(getSessionsDir(agentId), `${newSessionId}.jsonl`);
@@ -647,6 +648,7 @@ async function switchToSession(agentId, newSessionId, storeRef, resolvedInfo = n
     sessionKey: currentSessionKey,
     jsonlPath: newJsonlPath
   });
+  console.log(`   Session binding: source=${resolvedSource}, key=${currentSessionKey || 'N/A'}`);
   
   // Load fresh store (keep artifacts, reset messages for new session)
   storeRef.current = loadStore(agentId);
@@ -828,6 +830,7 @@ async function main() {
     ? null
     : await getActiveSessionInfo(agentId);
   const sessionId = explicitSessionId || resolved.sessionId;
+  const resolvedSource = explicitSessionId ? 'explicit' : (resolved?.source || 'unknown');
   
   // Check if session changed since last run
   const lastSessionId = loadLastSessionId(agentId);
@@ -860,6 +863,8 @@ async function main() {
   console.log('='.repeat(60));
   console.log(`Agent:    ${agentId}`);
   console.log(`Session:  ${sessionId}`);
+  console.log(`Source:   ${resolvedSource}`);
+  console.log(`Key:      ${currentSessionKey || 'N/A'}`);
   console.log(`JSONL:    ${jsonlPath}`);
   
   // Load config
