@@ -411,7 +411,7 @@ async function getSessionMessageCount(agentId) {
       agentId,
       isSubagent: isSubagentMode,
       openclawAgentsDir: OPENCLAW_AGENTS_DIR,
-      listSessions: isSubagentMode ? listGatewaySessions : null,
+      listSessions: listGatewaySessions,
       logger: (msg) => console.log(`[session-resolver] ${agentId}: ${msg}`)
     });
     const jsonlPath = sessionInfo?.jsonlPath;

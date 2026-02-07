@@ -730,8 +730,8 @@ function watchSessionDirectory(agentId, storeRef) {
 }
 
 /**
- * Auto-detect active session for agent
- * Uses file-based detection only (reads from correct sessions directory)
+ * Auto-detect active session for agent.
+ * Prefers gateway session binding for all agents, with resolver fallback to file mtime.
  */
 async function getActiveSession(agentId, options = {}) {
   const info = await getActiveSessionInfo(agentId, options);
@@ -744,7 +744,7 @@ async function getActiveSessionInfo(agentId, options = {}) {
   const openclawAgentsDir = options.openclawAgentsDir || path.join(OPENCLAW_DIR, 'agents');
   const listSessions = Object.prototype.hasOwnProperty.call(options, 'listSessions')
     ? options.listSessions
-    : (subagent ? listGatewaySessions : null);
+    : listGatewaySessions;
   const logger = (msg) => {
     if (!quiet) {
       console.log(`⚠️ ${msg}`);
