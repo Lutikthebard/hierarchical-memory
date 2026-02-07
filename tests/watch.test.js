@@ -1,6 +1,9 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
-const { parseMessage, extractContent, processLine } = require('../scripts/watch');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { parseMessage, extractContent, processLine, getActiveSessionInfo } = require('../scripts/watch');
 const { createEmptyStore } = require('../scripts/store');
 
 describe('watch.js', () => {
@@ -162,6 +165,77 @@ describe('watch.js', () => {
       assert.equal(first, true);
       assert.equal(second, false);
       assert.equal(storeRef.current.messages.length, 1);
+    });
+  });
+
+  describe('subagent session resolution with transient gateway outage', () => {
+    it('uses pinned cache during short outage and resyncs to gateway when it recovers', async () => {
+      const prevDataDir = process.env.HM_DATA_DIR;
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hm-watch-session-'));
+      const dataDir = path.join(tmp, 'data');
+      const agentsDir = path.join(tmp, 'openclaw', 'agents');
+      const agentId = 'council-psychologist';
+      process.env.HM_DATA_DIR = dataDir;
+
+      try {
+        const pinnedSessionId = 'sub-pinned';
+        const pinnedPath = path.join(agentsDir, agentId, 'sessions', `${pinnedSessionId}.jsonl`);
+        fs.mkdirSync(path.dirname(pinnedPath), { recursive: true });
+        fs.writeFileSync(pinnedPath, '', 'utf8');
+
+        fs.mkdirSync(path.join(dataDir, agentId), { recursive: true });
+        fs.writeFileSync(
+          path.join(dataDir, agentId, 'last-session.json'),
+          JSON.stringify({
+            sessionId: pinnedSessionId,
+            sessionKey: `agent:${agentId}`,
+            jsonlPath: pinnedPath,
+            timestamp: Date.now()
+          }),
+          'utf8'
+        );
+
+        const outageInfo = await getActiveSessionInfo(agentId, {
+          quiet: true,
+          openclawAgentsDir: agentsDir,
+          listSessions: async () => {
+            throw new Error('gateway unavailable');
+          }
+        });
+
+        assert.equal(outageInfo.source, 'pinned-cache');
+        assert.equal(outageInfo.sessionId, pinnedSessionId);
+        assert.equal(outageInfo.sessionKey, `agent:${agentId}`);
+
+        const recoveredSessionId = 'sub-new';
+        const recoveredPath = path.join(agentsDir, 'main', 'sessions', `${recoveredSessionId}.jsonl`);
+        fs.mkdirSync(path.dirname(recoveredPath), { recursive: true });
+        fs.writeFileSync(recoveredPath, '', 'utf8');
+
+        const recoveredInfo = await getActiveSessionInfo(agentId, {
+          quiet: true,
+          openclawAgentsDir: agentsDir,
+          listSessions: async () => ([
+            { key: `agent:${agentId}`, sessionId: recoveredSessionId, updatedAt: Date.now() }
+          ])
+        });
+
+        assert.equal(recoveredInfo.source, 'gateway');
+        assert.equal(recoveredInfo.sessionId, recoveredSessionId);
+        assert.equal(recoveredInfo.sessionKey, `agent:${agentId}`);
+
+        const updatedBinding = JSON.parse(
+          fs.readFileSync(path.join(dataDir, agentId, 'last-session.json'), 'utf8')
+        );
+        assert.equal(updatedBinding.sessionId, recoveredSessionId);
+        assert.equal(updatedBinding.sessionKey, `agent:${agentId}`);
+      } finally {
+        if (typeof prevDataDir === 'undefined') {
+          delete process.env.HM_DATA_DIR;
+        } else {
+          process.env.HM_DATA_DIR = prevDataDir;
+        }
+      }
     });
   });
 });

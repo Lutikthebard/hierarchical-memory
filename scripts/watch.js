@@ -32,6 +32,7 @@ const { OpenClawClient } = require('./gateway-client');
 const { parseMessage, extractContent } = require('./message-parser');
 const { CompactController } = require('./compact-controller');
 const { createSummarizationOrchestrator } = require('./summarization-orchestrator');
+const { resolveActiveSession, createGatewaySessionLister } = require('./session-resolver');
 
 // Default paths
 const OPENCLAW_DIR = path.join(process.env.HOME, '.openclaw');
@@ -75,6 +76,30 @@ function getSessionsDir(agentId) {
   return path.join(OPENCLAW_DIR, 'agents', effectiveAgentId, 'sessions');
 }
 
+function getSessionDirsForAgent(agentId) {
+  const directDir = path.join(OPENCLAW_DIR, 'agents', agentId, 'sessions');
+  const mainDir = path.join(OPENCLAW_DIR, 'agents', 'main', 'sessions');
+  return isSubagent(agentId) ? [mainDir, directDir] : [directDir, mainDir];
+}
+
+function findSessionPathInDirs(sessionId, dirs) {
+  for (const dir of dirs) {
+    const candidate = path.join(dir, `${sessionId}.jsonl`);
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function requireSessionKey(agentId) {
+  if (currentSessionKey) return currentSessionKey;
+  if (isSubagent(agentId)) {
+    throw new Error(`No session key resolved for subagent ${agentId}`);
+  }
+  return `agent:${agentId}:main`;
+}
+
 // Debounce for context regeneration
 let contextRegenerateTimeout = null;
 const CONTEXT_DEBOUNCE_MS = 10000; // 10 seconds
@@ -82,15 +107,33 @@ const CONTEXT_DEBOUNCE_MS = 10000; // 10 seconds
 // Current session tracking for hot-swap
 let currentTailProcess = null;
 let currentSessionId = null;
+let currentSessionKey = null;
+let currentStoreRef = null;
+let currentJsonlPath = null;
+const listGatewaySessions = createGatewaySessionLister(() => new OpenClawClient(GATEWAY_URL));
 
 /**
  * Save last known session ID to prevent duplicate context injections on restart
  */
 function saveLastSessionId(agentId, sessionId) {
+  saveLastSessionBinding(agentId, { sessionId });
+}
+
+function getLastSessionPath(agentId) {
   const dataDir = getDataDir();
-  const lastSessionPath = path.join(dataDir, agentId, 'last-session.json');
+  return path.join(dataDir, agentId, 'last-session.json');
+}
+
+function saveLastSessionBinding(agentId, binding = {}) {
+  const lastSessionPath = getLastSessionPath(agentId);
   try {
-    fs.writeFileSync(lastSessionPath, JSON.stringify({ sessionId, timestamp: Date.now() }, null, 2));
+    const payload = {
+      sessionId: binding.sessionId || null,
+      sessionKey: binding.sessionKey || null,
+      jsonlPath: binding.jsonlPath || null,
+      timestamp: Date.now()
+    };
+    fs.writeFileSync(lastSessionPath, JSON.stringify(payload, null, 2));
   } catch (e) {
     // Silent fail
   }
@@ -100,17 +143,31 @@ function saveLastSessionId(agentId, sessionId) {
  * Load last known session ID
  */
 function loadLastSessionId(agentId) {
-  const dataDir = getDataDir();
-  const lastSessionPath = path.join(dataDir, agentId, 'last-session.json');
+  const binding = loadLastSessionBinding(agentId);
+  return binding?.sessionId || null;
+}
+
+function loadLastSessionBinding(agentId) {
+  const lastSessionPath = getLastSessionPath(agentId);
   try {
     if (fs.existsSync(lastSessionPath)) {
       const data = JSON.parse(fs.readFileSync(lastSessionPath, 'utf8'));
-      return data.sessionId;
+      if (typeof data === 'string') {
+        return { sessionId: data };
+      }
+      if (data && typeof data === 'object') {
+        return {
+          sessionId: data.sessionId || null,
+          sessionKey: data.sessionKey || null,
+          jsonlPath: data.jsonlPath || null,
+          timestamp: data.timestamp || null
+        };
+      }
     }
   } catch (e) {
     // Silent fail
   }
-  return null;
+  return {};
 }
 
 function getContextPath(agentId) {
@@ -187,7 +244,7 @@ async function injectContext(agentId, reason = 'manual') {
     
     // Send context as user message (agent will see it)
     const message = `📚 **Hierarchical Memory Context** (auto-injected after ${reason})\n\n${contextContent}`;
-    const targetSessionKey = `agent:${agentId}:main`;
+    const targetSessionKey = requireSessionKey(agentId);
     
     console.log(`   → Sending to sessionKey: ${targetSessionKey}`);
     const sendResult = await client.rpc('chat.send', {
@@ -260,12 +317,14 @@ async function checkCompactionOccurred(jsonlPath, startLine) {
  */
 async function sendCompactMessage(agentId, message) {
   try {
+    await forceSyncSessionToStore(agentId);
+
     const crypto = require('crypto');
     const client = new OpenClawClient(GATEWAY_URL);
     await client.connect();
     
     // Send /compact command via WebSocket
-    const compactSessionKey = `agent:${agentId}:main`;
+    const compactSessionKey = requireSessionKey(agentId);
     console.log(`   → Sending /compact to sessionKey: ${compactSessionKey}`);
     await client.rpc('chat.send', {
       sessionKey: compactSessionKey,
@@ -280,6 +339,41 @@ async function sendCompactMessage(agentId, message) {
   } catch (err) {
     console.log(`   ⚠️  Failed to send /compact: ${err.message}`);
     return false;
+  }
+}
+
+/**
+ * Force-sync session JSONL into store right before /compact.
+ * This reduces risk of losing latest messages if compaction starts before tail catches up.
+ */
+async function forceSyncSessionToStore(agentId) {
+  if (!currentStoreRef || !currentJsonlPath || !fs.existsSync(currentJsonlPath)) {
+    return;
+  }
+
+  try {
+    const content = fs.readFileSync(currentJsonlPath, 'utf8');
+    const lines = content.split('\n').filter((l) => l.trim());
+    let added = 0;
+
+    for (const line of lines) {
+      if (await processLine(agentId, currentStoreRef, line, {
+        verbose: false,
+        skipThresholdCheck: true,
+        skipAutoCompact: true,
+        skipContextRegenerate: true,
+        skipPersistence: true
+      })) {
+        added++;
+      }
+    }
+
+    if (added > 0) {
+      saveStore(agentId, currentStoreRef.current);
+      console.log(`   🔄 Pre-compact sync: +${added} messages from JSONL`);
+    }
+  } catch (err) {
+    console.log(`   ⚠️  Pre-compact sync failed: ${err.message}`);
   }
 }
 
@@ -362,7 +456,7 @@ async function processLine(agentId, storeRef, line, options = {}) {
   const agentCfg = options.agentConfig || loadAgentConfig(agentId);
   const autoCompact = agentCfg.autoCompact || {};
   
-  if (autoCompact.enabled) {
+  if (autoCompact.enabled && !options.skipAutoCompact) {
     await compactController.maybeTriggerOrRetry({
       agentId,
       msg,
@@ -510,7 +604,7 @@ function watchFile(agentId, storeRef, jsonlPath, options = {}) {
  * Switch to a new session (hot-swap)
  * Kills old tail, loads new store, starts new tail
  */
-async function switchToSession(agentId, newSessionId, storeRef) {
+async function switchToSession(agentId, newSessionId, storeRef, resolvedInfo = null) {
   console.log(`\n🔄 SESSION CHANGE DETECTED!`);
   console.log(`   Old: ${currentSessionId}`);
   console.log(`   New: ${newSessionId}`);
@@ -523,11 +617,40 @@ async function switchToSession(agentId, newSessionId, storeRef) {
   
   // Update current session
   currentSessionId = newSessionId;
-  const sessionsDir = getSessionsDir(agentId);
-  const newJsonlPath = path.join(sessionsDir, `${newSessionId}.jsonl`);
+  currentSessionKey = resolvedInfo?.sessionKey || null;
+  const sessionDirs = getSessionDirsForAgent(agentId);
+  const fallbackPath = findSessionPathInDirs(newSessionId, sessionDirs);
+  const newJsonlPath = resolvedInfo?.jsonlPath || fallbackPath || path.join(getSessionsDir(agentId), `${newSessionId}.jsonl`);
+  currentJsonlPath = newJsonlPath;
+
+  if (!currentSessionKey) {
+    // Best-effort refresh for session key consistency.
+    try {
+      const resolved = await getActiveSessionInfo(agentId, { quiet: true });
+      if (resolved.sessionId === newSessionId && resolved.sessionKey) {
+        currentSessionKey = resolved.sessionKey;
+      }
+    } catch (_e) {}
+  }
+
+  if (isSubagent(agentId) && !currentSessionKey) {
+    const pinned = loadLastSessionBinding(agentId);
+    if (pinned.sessionId === newSessionId && pinned.sessionKey) {
+      currentSessionKey = pinned.sessionKey;
+    } else {
+      throw new Error(`Subagent ${agentId} has no session key for session ${newSessionId}`);
+    }
+  }
+
+  saveLastSessionBinding(agentId, {
+    sessionId: newSessionId,
+    sessionKey: currentSessionKey,
+    jsonlPath: newJsonlPath
+  });
   
   // Load fresh store (keep artifacts, reset messages for new session)
   storeRef.current = loadStore(agentId);
+  currentStoreRef = storeRef;
   const artifactCount = Object.values(storeRef.current.artifacts || {}).reduce((sum, arr) => sum + (arr?.length || 0), 0);
   console.log(`   Loaded store: ${storeRef.current.messages.length} messages, ${artifactCount} artifacts`);
   
@@ -567,14 +690,15 @@ async function switchToSession(agentId, newSessionId, storeRef) {
  * Automatically switch to newer sessions when they appear
  */
 function watchSessionDirectory(agentId, storeRef) {
-  const sessionsDir = getSessionsDir(agentId);
-  
-  if (!fs.existsSync(sessionsDir)) {
-    console.log(`⚠️  Sessions directory not found: ${sessionsDir}`);
+  const sessionDirs = getSessionDirsForAgent(agentId).filter((d, i, arr) => arr.indexOf(d) === i);
+  const existingDirs = sessionDirs.filter((d) => fs.existsSync(d));
+
+  if (existingDirs.length === 0) {
+    console.log(`⚠️  Sessions directory not found for ${agentId}`);
     return;
   }
-  
-  console.log(`\n👁️  Watching ${sessionsDir} for new sessions...`);
+
+  console.log(`\n👁️  Watching session dirs for ${agentId}: ${existingDirs.join(', ')}`);
   
   // Debounce to avoid rapid-fire events
   let checkTimeout = null;
@@ -584,11 +708,11 @@ function watchSessionDirectory(agentId, storeRef) {
     
     checkTimeout = setTimeout(async () => {
       try {
-        const activeSessionId = await getActiveSession(agentId, { quiet: true });
-        
-        if (activeSessionId && activeSessionId !== currentSessionId) {
-          console.log(`\n🔄 New session detected: ${activeSessionId}`);
-          await switchToSession(agentId, activeSessionId, storeRef);
+        const active = await getActiveSessionInfo(agentId, { quiet: true });
+
+        if (active.sessionId && active.sessionId !== currentSessionId) {
+          console.log(`\n🔄 New session detected: ${active.sessionId}`);
+          await switchToSession(agentId, active.sessionId, storeRef, active);
         }
       } catch (err) {
         // Silently ignore errors
@@ -596,11 +720,13 @@ function watchSessionDirectory(agentId, storeRef) {
     }, 2000); // 2 second debounce
   };
   
-  fs.watch(sessionsDir, { persistent: true }, (eventType, filename) => {
-    if (filename && filename.endsWith('.jsonl')) {
-      checkForNewSession();
-    }
-  });
+  for (const dir of existingDirs) {
+    fs.watch(dir, { persistent: true }, (eventType, filename) => {
+      if (filename && filename.endsWith('.jsonl')) {
+        checkForNewSession();
+      }
+    });
+  }
 }
 
 /**
@@ -608,77 +734,70 @@ function watchSessionDirectory(agentId, storeRef) {
  * Uses file-based detection only (reads from correct sessions directory)
  */
 async function getActiveSession(agentId, options = {}) {
+  const info = await getActiveSessionInfo(agentId, options);
+  return info.sessionId;
+}
+
+async function getActiveSessionInfo(agentId, options = {}) {
   const quiet = options.quiet || false;
-  
-  // Find most recently modified JSONL file in correct directory
-  const sessionsDir = getSessionsDir(agentId);
-  if (!fs.existsSync(sessionsDir)) {
-    throw new Error(`Sessions directory not found: ${sessionsDir}`);
-  }
-  
-  let files = fs.readdirSync(sessionsDir)
-    .filter(f => f.endsWith('.jsonl'))
-    .map(f => ({
-      name: f,
-      path: path.join(sessionsDir, f),
-      sessionId: f.replace('.jsonl', ''),
-      mtime: fs.statSync(path.join(sessionsDir, f)).mtime.getTime()
-    }))
-    .sort((a, b) => b.mtime - a.mtime);
-  
-  // For subagents: query gateway to find the correct session file
-  if (isSubagent(agentId)) {
-    const targetKey = `agent:${agentId}`;
-    let client;
-    try {
-      client = new OpenClawClient();
-      await client.connect();
-      const result = await client.rpc('sessions.list', { limit: 100 });
-      const sessions = result?.sessions || [];
-      const match = sessions.find(s => s.key === targetKey);
-      if (match) {
-        const sessionId = match.sessionId;
-        const jsonlPath = path.join(sessionsDir, `${sessionId}.jsonl`);
-        if (fs.existsSync(jsonlPath)) {
-          // Found via gateway — use only this file
-          const stat = fs.statSync(jsonlPath);
-          files = [{
-            name: `${sessionId}.jsonl`,
-            path: jsonlPath,
-            sessionId,
-            mtime: stat.mtime.getTime()
-          }];
-        } else {
-          if (!quiet) console.log(`⚠️ Gateway found session ${sessionId} but JSONL not found at ${jsonlPath}`);
-          files = [];
-        }
-      } else {
-        if (!quiet) console.log(`⚠️ No gateway session found with key=${targetKey}`);
-        files = [];
-      }
-    } catch (err) {
-      if (!quiet) console.log(`⚠️ Gateway lookup failed (${err.message}), falling back to file mtime`);
-      // On gateway failure, keep files as-is (sorted by mtime) — best effort
-    } finally {
-      if (client) {
-        try { client.close(); } catch {}
-      }
+  const subagent = isSubagent(agentId);
+  const openclawAgentsDir = options.openclawAgentsDir || path.join(OPENCLAW_DIR, 'agents');
+  const listSessions = Object.prototype.hasOwnProperty.call(options, 'listSessions')
+    ? options.listSessions
+    : (subagent ? listGatewaySessions : null);
+  const logger = (msg) => {
+    if (!quiet) {
+      console.log(`⚠️ ${msg}`);
     }
+  };
+  let info;
+
+  try {
+    info = await resolveActiveSession({
+      agentId,
+      isSubagent: subagent,
+      openclawAgentsDir,
+      listSessions,
+      logger
+    });
+  } catch (err) {
+    if (!subagent) throw err;
+    const pinned = loadLastSessionBinding(agentId);
+    const sessionDirs = [
+      path.join(openclawAgentsDir, 'main', 'sessions'),
+      path.join(openclawAgentsDir, agentId, 'sessions')
+    ];
+    const pinnedPath = pinned.jsonlPath && fs.existsSync(pinned.jsonlPath)
+      ? pinned.jsonlPath
+      : (pinned.sessionId ? findSessionPathInDirs(pinned.sessionId, sessionDirs) : null);
+    if (!pinned.sessionId || !pinned.sessionKey || !pinnedPath) {
+      throw err;
+    }
+    logger(`Gateway unavailable for ${agentId}; using pinned session ${pinned.sessionId}`);
+    info = {
+      sessionId: pinned.sessionId,
+      sessionKey: pinned.sessionKey,
+      jsonlPath: pinnedPath,
+      source: 'pinned-cache'
+    };
   }
 
-  if (files.length === 0) {
-    throw new Error(`No JSONL files found in ${sessionsDir}${isSubagent(agentId) ? ` matching agent:${agentId}` : ''}`);
+  if (info.sessionId && info.sessionKey) {
+    saveLastSessionBinding(agentId, {
+      sessionId: info.sessionId,
+      sessionKey: info.sessionKey,
+      jsonlPath: info.jsonlPath
+    });
   }
-  
-  const newest = files[0];
-  const sessionId = newest.sessionId;
+
   if (!quiet) {
-    console.log(`🔍 Auto-detected session via file mtime`);
-    console.log(`   Directory: ${sessionsDir}`);
-    console.log(`   File: ${newest.name}`);
-    console.log(`   Modified: ${new Date(newest.mtime).toISOString()}`);
+    console.log(`🔍 Auto-detected session (${info.source})`);
+    console.log(`   Session ID: ${info.sessionId}`);
+    console.log(`   Session Key: ${info.sessionKey || 'N/A (file fallback)'}`);
+    console.log(`   JSONL: ${info.jsonlPath}`);
   }
-  return sessionId;
+
+  return info;
 }
 
 /**
@@ -704,7 +823,11 @@ async function main() {
   const [agentId, explicitSessionId, explicitPath] = args;
   
   // Auto-detect session if not provided
-  const sessionId = explicitSessionId || await getActiveSession(agentId);
+  const subagent = isSubagent(agentId);
+  const resolved = explicitSessionId
+    ? null
+    : await getActiveSessionInfo(agentId);
+  const sessionId = explicitSessionId || resolved.sessionId;
   
   // Check if session changed since last run
   const lastSessionId = loadLastSessionId(agentId);
@@ -712,14 +835,25 @@ async function main() {
   
   // Track current session for hot-swap
   currentSessionId = sessionId;
+  currentSessionKey = resolved?.sessionKey || (subagent ? null : `agent:${agentId}:main`);
+  if (subagent && !currentSessionKey) {
+    throw new Error(`Subagent ${agentId} cannot start without resolved session key`);
+  }
   
   // Save current session ID
   saveLastSessionId(agentId, sessionId);
   
   // Determine JSONL path
   const sessionsDir = getSessionsDir(agentId);
-  const jsonlPath = explicitPath || 
+  const jsonlPath = explicitPath ||
+    resolved?.jsonlPath ||
     path.join(sessionsDir, `${sessionId}.jsonl`);
+  currentJsonlPath = jsonlPath;
+  saveLastSessionBinding(agentId, {
+    sessionId,
+    sessionKey: currentSessionKey,
+    jsonlPath
+  });
   
   console.log('='.repeat(60));
   console.log('HIERARCHICAL MEMORY WATCHER');
@@ -736,6 +870,7 @@ async function main() {
   // Load or create store and wrap in reference object
   // CRITICAL: storeRef allows async callbacks to update the store
   const storeRef = { current: loadStore(agentId) };
+  currentStoreRef = storeRef;
   const initialCount = storeRef.current.messages.length;
   console.log(`\nLoaded store: ${initialCount} existing messages`);
   
@@ -820,7 +955,8 @@ module.exports = {
   parseMessage,
   extractContent,
   processLine,
-  onThresholdReached
+  onThresholdReached,
+  getActiveSessionInfo
 };
 
 // Run if called directly
