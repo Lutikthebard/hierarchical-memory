@@ -22,7 +22,8 @@ const BASE_DIR = path.join(__dirname, '..');
 const SCRIPTS_DIR = path.join(BASE_DIR, 'scripts');
 const AGENTS_CONFIG_PATH = process.env.HM_AGENTS_CONFIG_PATH || path.join(BASE_DIR, 'agents.json');
 const OPENCLAW_AGENTS_DIR = process.env.OPENCLAW_AGENTS_DIR || path.join(process.env.HOME, '.openclaw', 'agents');
-const listGatewaySessions = createGatewaySessionLister(() => new OpenClawClient());
+const GATEWAY_URL = process.env.GATEWAY_URL || 'ws://127.0.0.1:18789';
+const listGatewaySessions = createGatewaySessionLister(() => new OpenClawClient(GATEWAY_URL));
 
 // Process Manager - tracks running watchers
 const runningWatchers = new Map(); // agentId -> { process, pid, startTime }
