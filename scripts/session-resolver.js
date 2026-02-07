@@ -21,7 +21,9 @@ function getCandidateKeys(agentId, isSubagent) {
       `agent:${agentId}:main`,
       `agent:${agentId}`
     ];
-  if (isSubagent) {
+  // Legacy OpenClaw routing key may alias main session.
+  // Disabled by default to avoid subagent switching to main session on main activity.
+  if (isSubagent && process.env.HM_ENABLE_LEGACY_SUBAGENT_KEY === '1') {
     keys.push(`agent:main:subagent:${agentId}`);
   }
   return keys;
