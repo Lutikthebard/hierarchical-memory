@@ -49,10 +49,20 @@ function chooseGatewaySession(sessions, candidateKeys) {
   };
 }
 
-function buildSessionDirs(agentId, isSubagent, openclawAgentsDir) {
+function buildSessionDirsForLookup(agentId, isSubagent, openclawAgentsDir) {
   const directDir = path.join(openclawAgentsDir, agentId, 'sessions');
   const mainDir = path.join(openclawAgentsDir, 'main', 'sessions');
+  // For gateway-resolved sessionId, search both locations.
   return isSubagent ? [mainDir, directDir] : [directDir, mainDir];
+}
+
+function buildSessionDirsForFallback(agentId, isSubagent, openclawAgentsDir) {
+  const directDir = path.join(openclawAgentsDir, agentId, 'sessions');
+  const mainDir = path.join(openclawAgentsDir, 'main', 'sessions');
+  if (isSubagent) return [mainDir, directDir];
+  if (agentId === 'main') return [mainDir];
+  // Non-main regular agents must not fall back to main sessions.
+  return [directDir];
 }
 
 function findSessionPathById(sessionId, sessionDirs) {
@@ -110,7 +120,8 @@ async function resolveActiveSession({
   listSessions = null,
   logger = () => {}
 }) {
-  const sessionDirs = buildSessionDirs(agentId, isSubagent, openclawAgentsDir);
+  const lookupDirs = buildSessionDirsForLookup(agentId, isSubagent, openclawAgentsDir);
+  const fallbackDirs = buildSessionDirsForFallback(agentId, isSubagent, openclawAgentsDir);
   const candidateKeys = getCandidateKeys(agentId, isSubagent);
 
   if (typeof listSessions === 'function') {
@@ -118,7 +129,7 @@ async function resolveActiveSession({
       const sessions = await listSessions();
       const gatewayChoice = chooseGatewaySession(sessions, candidateKeys);
       if (gatewayChoice) {
-        const jsonlPath = findSessionPathById(gatewayChoice.sessionId, sessionDirs);
+        const jsonlPath = findSessionPathById(gatewayChoice.sessionId, lookupDirs);
         if (jsonlPath) {
           return {
             ...gatewayChoice,
@@ -139,7 +150,7 @@ async function resolveActiveSession({
     }
   }
 
-  const newest = pickNewestSessionFile(sessionDirs);
+  const newest = pickNewestSessionFile(fallbackDirs);
   if (!newest) {
     throw new Error(`No JSONL files found for agent=${agentId}`);
   }

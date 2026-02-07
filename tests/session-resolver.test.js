@@ -100,6 +100,25 @@ describe('session resolver', () => {
     assert.equal(Boolean(info.jsonlPath.endsWith('new.jsonl')), true);
   });
 
+  it('does not fall back to main sessions for non-main regular agent', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hm-session-resolver-'));
+    const openclawDir = path.join(tmp, 'openclaw', 'agents');
+    const mainDir = path.join(openclawDir, 'main', 'sessions');
+    touch(path.join(mainDir, 'main-newest.jsonl'), Date.now() - 1_000);
+
+    await assert.rejects(
+      () => resolveActiveSession({
+        agentId: 'council-fitness',
+        isSubagent: false,
+        openclawAgentsDir: openclawDir,
+        listSessions: async () => {
+          throw new Error('gateway unavailable');
+        }
+      }),
+      /No JSONL files found/
+    );
+  });
+
   it('does not fallback to file-mtime for subagent when gateway lookup fails', async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hm-session-resolver-'));
     const openclawDir = path.join(tmp, 'openclaw', 'agents');
