@@ -1,5 +1,6 @@
 const MESSAGE_CLASSES = Object.freeze([
   'dialogue',
+  'inter_agent',
   'heartbeat',
   'command',
   'system_noise',
@@ -7,9 +8,9 @@ const MESSAGE_CLASSES = Object.freeze([
 ]);
 
 const DEFAULT_CLASS_FILTERS = Object.freeze({
-  storeMessageClasses: ['dialogue'],
+  storeMessageClasses: ['dialogue', 'inter_agent'],
   countMessageClasses: ['dialogue'],
-  contextMessageClasses: ['dialogue'],
+  contextMessageClasses: ['dialogue', 'inter_agent'],
   commandAllowlist: []
 });
 
@@ -33,7 +34,7 @@ function classifyMessage(role, content) {
   }
 
   if (text.includes('MEMORY TASK:') ||
-      text.includes('<memory_artifact>') ||
+      /<memory_artifact(?:_L\d+)?>/.test(text) ||
       text.includes('Hierarchical Memory Context') ||
       (text.includes('"content":') &&
        text.includes('"startTimestamp":') &&

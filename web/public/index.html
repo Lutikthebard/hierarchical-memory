@@ -27,9 +27,9 @@
     
     <!-- Agent Selector -->
     <div class="bg-white border-b px-4 py-2">
-      <div class="flex items-center gap-4">
+      <div class="flex items-center gap-3 flex-wrap w-full">
         <label class="text-sm font-medium">Agent:</label>
-        <select x-model="selectedAgent" @change="switchAgent()" class="border rounded px-3 py-1 text-sm">
+        <select x-model="selectedAgent" @change="switchAgent()" class="border rounded px-3 py-1 text-sm min-w-0 flex-1 sm:flex-none">
           <template x-for="agent in agents" :key="agent.id">
             <option :value="agent.id" x-text="agent.name + (agent.isSubagent ? ' [SUB]' : '') + (agent.running ? ' ✓' : '')"></option>
           </template>
@@ -37,34 +37,66 @@
         <button @click="activeTab = 'config'; loadAgentConfig()" class="text-sm px-2 py-1 bg-orange-100 hover:bg-orange-200 rounded text-orange-700" title="Config">
           ⚙️
         </button>
-        <div class="flex gap-2 ml-auto">
-          <button
-            @click="rebuildContext()"
-            :disabled="contextRebuildInProgress || !selectedAgent"
-            class="text-sm px-3 py-1 rounded bg-cyan-600 text-white disabled:opacity-50 disabled:cursor-not-allowed"
-            title="Rebuild CONTEXT.md for selected agent"
-          >
-            <span x-text="contextRebuildInProgress ? 'Rebuilding...' : 'Rebuild Context'"></span>
-          </button>
-          <button
-            @click="syncSessionFromGateway()"
-            :disabled="sessionSyncInProgress || !selectedAgent"
-            class="text-sm px-3 py-1 rounded bg-indigo-500 text-white disabled:opacity-50 disabled:cursor-not-allowed"
-            title="Find and set active gateway session"
-          >
-            <span x-text="sessionSyncInProgress ? 'Syncing...' : 'Sync Session'"></span>
-          </button>
-          <template x-if="currentAgentStatus.running">
-            <span class="bg-green-100 text-green-700 px-2 py-1 rounded text-xs">Running</span>
-          </template>
-          <template x-if="!currentAgentStatus.running">
-            <span class="bg-gray-100 text-gray-600 px-2 py-1 rounded text-xs">Stopped</span>
-          </template>
-          <button @click="toggleAgent()" class="text-sm px-3 py-1 rounded" 
-                  :class="currentAgentStatus.running ? 'bg-red-500 text-white' : 'bg-green-500 text-white'">
-            <span x-text="currentAgentStatus.running ? 'Stop' : 'Start'"></span>
-          </button>
-        </div>
+      </div>
+      <div class="mt-2 flex items-center gap-2 flex-wrap w-full">
+        <button
+          @click="rebuildContext()"
+          :disabled="contextRebuildInProgress || !selectedAgent"
+          class="text-sm px-3 py-1 rounded bg-cyan-600 text-white disabled:opacity-50 disabled:cursor-not-allowed"
+          title="Rebuild CONTEXT.md for selected agent"
+        >
+          <span x-text="contextRebuildInProgress ? 'Rebuilding...' : 'Rebuild Context'"></span>
+        </button>
+        <button
+          @click="clearAgentMemory()"
+          :disabled="memoryClearInProgress || !selectedAgent"
+          class="text-sm px-3 py-1 rounded bg-red-600 text-white disabled:opacity-50 disabled:cursor-not-allowed"
+          title="Clear store, archived messages and context for selected agent"
+        >
+          <span x-text="memoryClearInProgress ? 'Clearing...' : 'Clear Memory'"></span>
+        </button>
+        <button
+          @click="showRollbackModal = true; if (typeof openRollbackModal === 'function') { openRollbackModal() }"
+          :disabled="!selectedAgent"
+          class="text-sm px-3 py-1 rounded bg-rose-600 text-white disabled:opacity-50 disabled:cursor-not-allowed"
+          title="Rollback memory to selected date/time"
+        >
+          Rollback Memory
+        </button>
+        <button
+          @click="syncSessionFromGateway()"
+          :disabled="sessionSyncInProgress || !selectedAgent"
+          class="text-sm px-3 py-1 rounded bg-indigo-500 text-white disabled:opacity-50 disabled:cursor-not-allowed"
+          title="Find and set active gateway session"
+        >
+          <span x-text="sessionSyncInProgress ? 'Syncing...' : 'Sync Session'"></span>
+        </button>
+        <button
+          @click="injectContextNow()"
+          :disabled="contextInjectInProgress || !selectedAgent"
+          class="text-sm px-3 py-1 rounded bg-violet-600 text-white disabled:opacity-50 disabled:cursor-not-allowed"
+          title="Rebuild and inject current CONTEXT.md"
+        >
+          <span x-text="contextInjectInProgress ? 'Injecting...' : 'Inject Context'"></span>
+        </button>
+        <button
+          @click="compactWithInject()"
+          :disabled="compactInjectInProgress || !selectedAgent"
+          class="text-sm px-3 py-1 rounded bg-amber-600 text-white disabled:opacity-50 disabled:cursor-not-allowed"
+          title="Send /compact, wait compaction, then inject current CONTEXT.md"
+        >
+          <span x-text="compactInjectInProgress ? 'Compacting...' : 'Compact + Inject'"></span>
+        </button>
+        <template x-if="currentAgentStatus.running">
+          <span class="bg-green-100 text-green-700 px-2 py-1 rounded text-xs">Running</span>
+        </template>
+        <template x-if="!currentAgentStatus.running">
+          <span class="bg-gray-100 text-gray-600 px-2 py-1 rounded text-xs">Stopped</span>
+        </template>
+        <button @click="toggleAgent()" class="text-sm px-3 py-1 rounded" 
+                :class="currentAgentStatus.running ? 'bg-red-500 text-white' : 'bg-green-500 text-white'">
+          <span x-text="currentAgentStatus.running ? 'Stop' : 'Start'"></span>
+        </button>
       </div>
       <div class="mt-2 text-xs text-gray-600 flex items-center gap-2 flex-wrap">
         <span class="font-medium">Active session:</span>
@@ -73,6 +105,10 @@
       </div>
       <div x-show="sessionSyncMessage" class="mt-2 text-xs text-gray-600" x-text="sessionSyncMessage"></div>
       <div x-show="contextRebuildMessage" class="mt-1 text-xs text-gray-600" x-text="contextRebuildMessage"></div>
+      <div x-show="contextInjectMessage" class="mt-1 text-xs text-gray-600" x-text="contextInjectMessage"></div>
+      <div x-show="compactInjectMessage" class="mt-1 text-xs text-gray-600" x-text="compactInjectMessage"></div>
+      <div x-show="memoryClearMessage" class="mt-1 text-xs text-gray-600" x-text="memoryClearMessage"></div>
+      <div x-show="rollbackMessage" class="mt-1 text-xs text-gray-600" x-text="rollbackMessage"></div>
     </div>
     
     <!-- Stats Bar -->
@@ -93,10 +129,8 @@
           <div class="text-lg font-bold text-purple-600" x-text="stats.artifacts?.L1 || 0"></div>
         </div>
         <div>
-          <div class="text-xs text-gray-600">L2/L3</div>
-          <div class="text-lg font-bold text-blue-600">
-            <span x-text="stats.artifacts?.L2 || 0"></span>/<span x-text="stats.artifacts?.L3 || 0"></span>
-          </div>
+          <div class="text-xs text-gray-600">Levels</div>
+          <div class="text-lg font-bold text-indigo-600" x-text="allLevelKeys().length"></div>
         </div>
       </div>
       <!-- Progress Bars -->
@@ -123,15 +157,28 @@
           </div>
         </div>
       </div>
+      <div class="mt-2 flex flex-wrap gap-2">
+        <template x-for="levelKey in allLevelKeys()" :key="'stats-' + levelKey">
+          <span class="text-xs px-2 py-1 rounded border border-gray-200" :class="levelTabTextClass(levelKey)">
+            <span x-text="levelKey"></span>: <span x-text="stats.artifacts?.[levelKey] || 0"></span>
+          </span>
+        </template>
+      </div>
     </div>
     
     <!-- Tabs -->
     <div class="bg-white border-b">
-      <div class="flex">
+      <div class="flex flex-wrap gap-1">
         <button @click="activeTab = 'context'" :class="activeTab === 'context' ? 'border-b-2 border-blue-500 font-semibold' : ''" class="px-4 py-2 text-sm">Context</button>
-        <button @click="activeTab = 'l1'" :class="activeTab === 'l1' ? 'border-b-2 border-purple-500 font-semibold' : ''" class="px-4 py-2 text-sm">L1 (<span x-text="artifacts.L1.length"></span>)</button>
-        <button @click="activeTab = 'l2'" :class="activeTab === 'l2' ? 'border-b-2 border-blue-500 font-semibold' : ''" class="px-4 py-2 text-sm">L2 (<span x-text="artifacts.L2.length"></span>)</button>
-        <button @click="activeTab = 'l3'" :class="activeTab === 'l3' ? 'border-b-2 border-green-500 font-semibold' : ''" class="px-4 py-2 text-sm">L3 (<span x-text="artifacts.L3.length"></span>)</button>
+        <template x-for="levelKey in artifactLevelKeys()" :key="'tab-' + levelKey">
+          <button
+            @click="activeTab = 'level-' + levelKey"
+            :class="activeTab === 'level-' + levelKey ? 'border-b-2 font-semibold ' + levelTabTextClass(levelKey) : ''"
+            class="px-4 py-2 text-sm"
+          >
+            <span x-text="levelKey"></span> (<span x-text="(artifacts[levelKey] || []).length"></span>)
+          </button>
+        </template>
         <button @click="activeTab = 'messages'" :class="activeTab === 'messages' ? 'border-b-2 border-gray-500 font-semibold' : ''" class="px-4 py-2 text-sm">Messages</button>
         <button @click="activeTab = 'logs'" :class="activeTab === 'logs' ? 'border-b-2 border-gray-500 font-semibold' : ''" class="px-4 py-2 text-sm">Logs</button>
       </div>
@@ -159,76 +206,38 @@
         </div>
       </div>
       
-      <!-- L1 Tab -->
-      <div x-show="activeTab === 'l1'">
-        <div class="space-y-2">
-          <template x-for="(art, idx) in artifacts.L1" :key="'l1-' + idx">
-            <div class="border border-purple-300 rounded">
-              <div @click="toggle('l1-' + idx)" class="bg-purple-50 p-2 cursor-pointer hover:bg-purple-100">
-                <div class="flex items-start gap-2">
-                  <span class="badge-l1">L1</span>
-                  <div class="flex-1 min-w-0">
-                    <div class="text-xs text-gray-600" x-text="formatTime(art.startTimestamp) + ' → ' + formatTime(art.endTimestamp)"></div>
-                    <div class="text-sm font-medium" x-text="extractTitle(art.content)"></div>
-                  </div>
-                  <button @click.stop="drilldown(1, idx)" class="text-purple-600 text-xs hover:underline px-2">📜</button>
-                </div>
-              </div>
-              <div x-show="expanded['l1-' + idx]" class="p-2 bg-white" style="display: none;">
-                <pre class="text-xs whitespace-pre-wrap" x-text="art.content"></pre>
-              </div>
-            </div>
-          </template>
-          <div x-show="artifacts.L1.length === 0" class="text-gray-500 text-center py-8">No L1 artifacts</div>
-        </div>
-      </div>
-      
-      <!-- L2 Tab -->
-      <div x-show="activeTab === 'l2'">
-        <div class="space-y-2">
-          <template x-for="(art, idx) in artifacts.L2" :key="'l2-' + idx">
-            <div class="border border-blue-300 rounded">
-              <div @click="toggle('l2-' + idx)" class="bg-blue-50 p-2 cursor-pointer hover:bg-blue-100">
-                <div class="flex items-start gap-2">
-                  <span class="badge-l2">L2</span>
-                  <div class="flex-1 min-w-0">
-                    <div class="text-xs text-gray-600" x-text="formatTime(art.startTimestamp) + ' → ' + formatTime(art.endTimestamp)"></div>
-                    <div class="text-sm font-medium" x-text="extractTitle(art.content)"></div>
-                  </div>
-                  <button @click.stop="drilldown(2, idx)" class="text-blue-600 text-xs hover:underline px-2">📂</button>
-                </div>
-              </div>
-              <div x-show="expanded['l2-' + idx]" class="p-2 bg-white" style="display: none;">
-                <pre class="text-xs whitespace-pre-wrap" x-text="art.content"></pre>
-              </div>
-            </div>
-          </template>
-          <div x-show="artifacts.L2.length === 0" class="text-gray-500 text-center py-8">No L2 artifacts</div>
-        </div>
-      </div>
-      
-      <!-- L3 Tab -->
-      <div x-show="activeTab === 'l3'">
-        <div class="space-y-2">
-          <template x-for="(art, idx) in artifacts.L3" :key="'l3-' + idx">
-            <div class="border border-green-300 rounded">
-              <div @click="toggle('l3-' + idx)" class="bg-green-50 p-2 cursor-pointer hover:bg-green-100">
-                <div class="flex items-start gap-2">
-                  <span class="badge-l3">L3</span>
-                  <div class="flex-1 min-w-0">
-                    <div class="text-xs text-gray-600" x-text="formatTime(art.startTimestamp) + ' → ' + formatTime(art.endTimestamp)"></div>
-                    <div class="text-sm font-medium" x-text="extractTitle(art.content)"></div>
+      <!-- Dynamic Level Tabs -->
+      <template x-for="levelKey in artifactLevelKeys()" :key="'panel-' + levelKey">
+        <div x-show="activeTab === 'level-' + levelKey">
+          <div class="space-y-2">
+            <template x-for="(art, idx) in (artifacts[levelKey] || [])" :key="levelKey + '-' + idx">
+              <div class="border rounded" :class="levelCardBorderClass(levelKey)">
+                <div @click="toggle(levelExpandedKey(levelKey, idx))" class="p-2 cursor-pointer" :class="levelCardHeaderClass(levelKey)">
+                  <div class="flex items-start gap-2">
+                    <span class="text-xs px-2 py-0.5 rounded font-bold" :class="levelBadgeClass(levelKey)" x-text="levelKey"></span>
+                    <div class="flex-1 min-w-0">
+                      <div class="text-xs text-gray-600" x-text="formatTime(art.startTimestamp) + ' → ' + formatTime(art.endTimestamp)"></div>
+                      <div class="text-sm font-medium" x-text="extractTitle(art.content)"></div>
+                    </div>
+                    <button
+                      @click.stop="drilldown(levelNumber(levelKey), idx)"
+                      :class="levelDrilldownButtonClass(levelKey)"
+                      class="text-xs hover:underline px-2"
+                      x-text="levelNumber(levelKey) === 1 ? '📜' : '📂'"
+                    ></button>
                   </div>
                 </div>
+                <div x-show="expanded[levelExpandedKey(levelKey, idx)]" class="p-2 bg-white" style="display: none;">
+                  <pre class="text-xs whitespace-pre-wrap" x-text="art.content"></pre>
+                </div>
               </div>
-              <div x-show="expanded['l3-' + idx]" class="p-2 bg-white" style="display: none;">
-                <pre class="text-xs whitespace-pre-wrap" x-text="art.content"></pre>
-              </div>
+            </template>
+            <div x-show="(artifacts[levelKey] || []).length === 0" class="text-gray-500 text-center py-8">
+              <span x-text="'No ' + levelKey + ' artifacts'"></span>
             </div>
-          </template>
-          <div x-show="artifacts.L3.length === 0" class="text-gray-500 text-center py-8">No L3 artifacts</div>
+          </div>
         </div>
-      </div>
+      </template>
       
       <!-- Messages Tab -->
       <div x-show="activeTab === 'messages'">
@@ -437,6 +446,15 @@
                          :disabled="!agentConfig.autoCompact.enabled"
                          class="w-20 border rounded px-2 py-1 text-sm">
                 </div>
+                <div>
+                  <label class="text-sm block mb-1">Message after <code>/compact</code> (optional):</label>
+                  <textarea x-model="agentConfig.autoCompact.postCompactMessage"
+                            :disabled="!agentConfig.autoCompact.enabled"
+                            rows="3"
+                            class="w-full border rounded px-2 py-1 text-sm font-mono"
+                            placeholder="Do not retain anything. The context will be provided in the next message."></textarea>
+                  <div class="text-xs text-gray-500 mt-1">Sent as: <code>/compact &lt;message&gt;</code></div>
+                </div>
               </div>
             </div>
           </div>
@@ -457,6 +475,42 @@
                 <input type="checkbox" x-model="agentConfig.autoInjectContext.onCompaction" :disabled="!agentConfig.autoInjectContext.enabled" class="rounded">
                 <span class="text-sm" :class="!agentConfig.autoInjectContext.enabled && 'text-gray-400'">On compaction detected</span>
               </label>
+              <div class="ml-4 space-y-2" :class="!agentConfig.autoInjectContext.enabled && 'opacity-50'">
+                <div>
+                  <label class="text-sm block mb-1">Text before context (optional):</label>
+                  <textarea x-model="agentConfig.autoInjectContext.preText"
+                            :disabled="!agentConfig.autoInjectContext.enabled"
+                            rows="2"
+                            class="w-full border rounded px-2 py-1 text-sm font-mono"
+                            placeholder="Additional text placed before auto-injected context"></textarea>
+                </div>
+                <div>
+                  <label class="text-sm block mb-1">Markdown files before context (one path per line):</label>
+                  <textarea :value="autoInjectFilesText('preMdFiles')"
+                            @input="setAutoInjectFiles('preMdFiles', $event.target.value)"
+                            :disabled="!agentConfig.autoInjectContext.enabled"
+                            rows="3"
+                            class="w-full border rounded px-2 py-1 text-sm font-mono"
+                            placeholder="docs/inject/prelude.md"></textarea>
+                </div>
+                <div>
+                  <label class="text-sm block mb-1">Text after context (optional):</label>
+                  <textarea x-model="agentConfig.autoInjectContext.postText"
+                            :disabled="!agentConfig.autoInjectContext.enabled"
+                            rows="2"
+                            class="w-full border rounded px-2 py-1 text-sm font-mono"
+                            placeholder="Additional text placed after auto-injected context"></textarea>
+                </div>
+                <div>
+                  <label class="text-sm block mb-1">Markdown files after context (one path per line):</label>
+                  <textarea :value="autoInjectFilesText('postMdFiles')"
+                            @input="setAutoInjectFiles('postMdFiles', $event.target.value)"
+                            :disabled="!agentConfig.autoInjectContext.enabled"
+                            rows="3"
+                            class="w-full border rounded px-2 py-1 text-sm font-mono"
+                            placeholder="docs/inject/postscript.md"></textarea>
+                </div>
+              </div>
             </div>
           </div>
           
@@ -529,7 +583,7 @@
         </div>
         <div class="flex-1 overflow-auto p-4">
           <div x-show="drilldownModal.loading" class="text-center py-8 text-gray-500">Loading...</div>
-          
+
           <!-- Messages -->
           <div x-show="!drilldownModal.loading && drilldownModal.type === 'messages'">
             <div class="text-sm text-gray-600 mb-3" x-text="drilldownModal.messages.length + ' messages'"></div>
@@ -545,7 +599,7 @@
               </template>
             </div>
           </div>
-          
+
           <!-- Source Artifacts -->
           <div x-show="!drilldownModal.loading && drilldownModal.type === 'artifacts'">
             <div class="text-sm text-gray-600 mb-3" x-text="drilldownModal.sourceArtifacts.length + ' source artifacts'"></div>
@@ -553,7 +607,11 @@
               <template x-for="(art, idx) in drilldownModal.sourceArtifacts" :key="'da-' + idx">
                 <div class="border border-purple-300 rounded p-3">
                   <div class="flex items-center gap-2 mb-2">
-                    <span class="badge-l1">L1</span>
+                    <span
+                      class="text-xs px-2 py-0.5 rounded font-bold"
+                      :class="levelBadgeClass('L' + (art.level || drilldownModal.sourceLevel || 1))"
+                      x-text="'L' + (art.level || drilldownModal.sourceLevel || 1)"
+                    ></span>
                     <span class="text-xs text-gray-600" x-text="formatTime(art.startTimestamp) + ' → ' + formatTime(art.endTimestamp)"></span>
                   </div>
                   <pre class="text-xs whitespace-pre-wrap bg-gray-50 p-2 rounded" x-text="art.content"></pre>
@@ -564,9 +622,71 @@
         </div>
       </div>
     </div>
-    
+
+    <!-- Rollback Modal -->
+    <div x-show="showRollbackModal" class="fixed inset-0 bg-black bg-opacity-50 z-40 flex items-center justify-center p-4" style="display: none;">
+      <div class="bg-white rounded shadow-xl w-full max-w-xl max-h-[90vh] overflow-auto">
+        <div class="border-b px-4 py-3 flex items-center justify-between">
+          <h3 class="font-bold">Rollback Memory</h3>
+          <button @click="showRollbackModal = false" class="text-gray-500 hover:text-gray-700 text-2xl">&times;</button>
+        </div>
+        <div class="p-4 space-y-4">
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">Cutoff datetime (local)</label>
+            <input type="datetime-local" x-model="rollbackCutoffLocal" class="w-full border rounded px-3 py-2 text-sm">
+            <div class="mt-1 text-xs text-gray-500">
+              UTC: <span x-text="rollbackCutoffIso || 'N/A'"></span>
+            </div>
+          </div>
+
+          <div class="flex gap-2">
+            <button
+              @click="previewRollback()"
+              :disabled="rollbackPreviewInProgress || rollbackApplyInProgress"
+              class="px-3 py-2 rounded bg-blue-600 text-white text-sm disabled:opacity-50"
+            >
+              <span x-text="rollbackPreviewInProgress ? 'Previewing...' : 'Preview'"></span>
+            </button>
+            <button
+              @click="applyRollback()"
+              :disabled="rollbackApplyInProgress || !rollbackPreview"
+              class="px-3 py-2 rounded bg-rose-600 text-white text-sm disabled:opacity-50"
+            >
+              <span x-text="rollbackApplyInProgress ? 'Applying...' : 'Apply Rollback'"></span>
+            </button>
+          </div>
+
+          <div x-show="rollbackPreview" class="border rounded p-3 text-sm space-y-1" style="display: none;">
+            <div><strong>Will keep messages:</strong> <span x-text="rollbackPreview?.result?.totalMessages || 0"></span></div>
+            <div><strong>Will remove messages:</strong> <span x-text="rollbackPreview?.removed?.totalMessages || 0"></span></div>
+            <div><strong>Will keep store messages:</strong> <span x-text="rollbackPreview?.result?.storeMessages || 0"></span></div>
+            <div><strong>Will keep archived messages:</strong> <span x-text="rollbackPreview?.result?.archivedMessages || 0"></span></div>
+          </div>
+
+          <div x-show="rollbackLastBackupId" class="border rounded p-3 text-sm space-y-2" style="display: none;">
+            <div>Last backup: <code x-text="rollbackLastBackupId"></code></div>
+            <button
+              @click="restoreRollback()"
+              :disabled="rollbackRestoreInProgress"
+              class="px-3 py-2 rounded bg-amber-600 text-white text-sm disabled:opacity-50"
+            >
+              <span x-text="rollbackRestoreInProgress ? 'Restoring...' : 'Restore Previous State'"></span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
   </div>
   
-  <script src="app.js?v=20260206-1"></script>
+  <script src="app-helpers.js?v=20260221-1"></script>
+  <script src="app-methods-data.js?v=20260221-3"></script>
+  <script src="app-methods-memory-session.js?v=20260221-1"></script>
+  <script src="app-methods-memory-rollback.js?v=20260221-1"></script>
+  <script src="app-methods-memory.js?v=20260221-4"></script>
+  <script src="app-methods-agents.js?v=20260221-3"></script>
+  <script src="app-methods.js?v=20260221-3"></script>
+  <script src="app-state.js?v=20260221-1"></script>
+  <script src="app.js?v=20260221-4"></script>
 </body>
 </html>

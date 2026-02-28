@@ -1,87 +1,153 @@
-# Hierarchical Memory System — Dev Environment
+# Hierarchical Memory System — DEV (actual)
 
-## Paths
+## Environments
 
 | Environment | Path |
 |---|---|
 | **DEV** | `~/Consilium/hierarchical-memory/` |
 | **PRODUCTION** | `~/clawd/council/hierarchical-memory/` |
 
-> ⚠️ **NEVER edit production directly.** All changes go through dev → tests → deploy.
+Rule: code changes are made in DEV first.
+Pipeline: `DEV -> tests -> rsync (code/config only)`.
 
-## Quick Start
+## Requirements
+
+- Node.js `>=20.18.1`
+- npm `>=10`
+
+## Setup
 
 ```bash
 cd ~/Consilium/hierarchical-memory
-
-# Install dependencies (all three package.json dirs)
-npm install && cd scripts && npm install && cd ../web && npm install && cd ..
+npm install
+cd scripts && npm install && cd ..
+cd web && npm install && cd ..
 ```
 
-## Run Tests
+No project `.env` files are used. Runtime is controlled by shell env vars + defaults in code.
 
-Uses Node.js built-in test runner (no extra deps):
+## Run
 
 ```bash
-# Run all tests
-node --test tests/*.test.js
-
-# Run specific test file
-node --test tests/store.test.js
-node --test tests/context.test.js
-node --test tests/watch.test.js
+cd ~/Consilium/hierarchical-memory
+npm run dev
 ```
 
-### Test Coverage
+Dashboard/API default: `http://localhost:3458`
 
-- **store.test.js** — `createEmptyStore`, `addMessage`, `addArtifact`, `compareTimestamps`, `formatTimestamp`, `getLastSummarizedTimestamp`, `filterForCounting` (27 tests)
-- **context.test.js** — `formatMessages`, `formatArtifacts`, `generateContext` (8 tests)
-- **watch.test.js** — `extractContent`, `parseMessage` (13 tests)
-
-## Run Dev Server (Web Dashboard)
+Service mode:
 
 ```bash
-cd web && node server.js
-# Dashboard: http://localhost:3458
+bash start.sh
+bash stop.sh
 ```
 
-## Run Watcher (message tracking)
+Runtime files:
+- `.run/server.log`
+- `.run/server.pid`
+
+## Tests
 
 ```bash
-cd scripts && node watch.js <agentId>
-# Example: node watch.js main
+cd ~/Consilium/hierarchical-memory
+npm test
+npm run test:watch
+npm run test:multiagent:offline
 ```
 
-## Deploy to Production
+Current offline suite: `74 tests / 74 passed` (last local run: `2026-02-08`).
 
-After tests pass:
+## Useful Scripts
 
 ```bash
-# Sync dev → production (excludes node_modules, data, logs)
-rsync -av --exclude='node_modules' --exclude='data' --exclude='*.log' --exclude='.git' --exclude='tests' \
+npm run demo:multiagent:offline
+npm run demo:view:offline
+npm run loadtest:offline
+```
+
+- `demo:multiagent:offline` runs isolated 3-agent scenario on `PORT` (default `3459`).
+- `demo:view:offline` opens read-only UI over latest snapshot/demo data.
+- `loadtest:offline` runs parallel stress scenarios; report -> `tmp/load-test-offline/reports/latest.{json,md}`.
+
+## Runtime Configuration (actual defaults)
+
+- `PORT` (default `3458`) — web server port.
+- `HM_DATA_DIR` (default `./data`) — runtime data root.
+- `HM_AGENTS_CONFIG_PATH` (default `./agents.json`) — agents registry.
+- `GATEWAY_URL` (default `ws://127.0.0.1:18789`) — gateway WS endpoint.
+- `OPENCLAW_AGENTS_DIR` (default `~/.openclaw/agents`) — sessions source for resolver/API.
+- `HM_LLM_MODE` (default `openclaw`, optional `mock`) — summarization adapter.
+- `GATEWAY_TOKEN` (optional) — gateway auth token.
+- `TRIGGER_TIMEOUT_SEC` (default `300`) — trigger timeout for openclaw mode.
+
+Global `config.json`:
+- `thresholds.L1` / `thresholds.default`
+- `contextOverlap`
+- `includeTimestamps`
+- `dataDir`
+- `startFromTimestamp` (lower bound for L0 unsummarized selection)
+- `autoCompact.postCompactMessage`
+
+## API (main endpoints)
+
+Per-agent:
+- `GET /api/agents`
+- `POST /api/agents`
+- `DELETE /api/agents/:id`
+- `POST /api/agents/:id/enable`
+- `POST /api/agents/:id/disable`
+- `GET /api/agents/:id/session/active`
+- `POST /api/agents/:id/session/sync`
+- `GET /api/agents/:id/stats`
+- `GET /api/agents/:id/store`
+- `GET /api/agents/:id/context`
+- `POST /api/agents/:id/context/rebuild`
+- `POST /api/agents/:id/memory/clear`
+- `GET /api/agents/:id/logs`
+- `GET /api/agents/:id/config`
+- `PUT /api/agents/:id/config`
+- `GET /api/agents/:id/messages-dates`
+- `GET /api/agents/:id/messages/:date`
+- `GET /api/agents/:id/artifact/:level/:index/messages`
+
+Legacy (`main` compatibility):
+- `/api/status`, `/api/stats`, `/api/store`, `/api/context`, `/api/logs`, `/api/control`, `/api/artifact/:level/:index/messages`
+
+## Deploy DEV -> Production
+
+### 1) Verify in DEV
+
+```bash
+cd ~/Consilium/hierarchical-memory
+npm test
+```
+
+### 2) Dry-run sync
+
+```bash
+rsync -av --dry-run \
+  --exclude='.git' \
+  --exclude='node_modules' \
+  --exclude='data' \
+  --exclude='*.log' \
+  --exclude='tests' \
   ~/Consilium/hierarchical-memory/ ~/clawd/council/hierarchical-memory/
-
-# Then restart the production server
-cd ~/clawd/council/hierarchical-memory && bash start.sh
 ```
 
-## Architecture
-
-Key modules:
-
-- **scripts/store.js** — Data layer: load/save stores, add messages/artifacts, threshold checking
-- **scripts/context.js** — Context generator: builds CONTEXT.md from hierarchical memory
-- **scripts/watch.js** — File watcher: tracks JSONL sessions, triggers summarization
-- **scripts/watch-ws.js** — WebSocket watcher: alternative using Gateway WS subscription
-- **scripts/trigger-ws.js** — Summarization trigger: sends prompts to agents via Gateway WS
-- **scripts/gateway-client.js** — WebSocket client for OpenClaw Gateway with Ed25519 auth
-- **web/server.js** — Express server: API + dashboard + process manager
-- **agents.json** — Agent configuration (which agents are tracked)
-- **config.json** — Global config (thresholds, data directory)
-
-## Git Workflow
+### 3) Real sync
 
 ```bash
-cd ~/Consilium/hierarchical-memory
-git add -A && git commit -m "description of changes"
+rsync -av \
+  --exclude='.git' \
+  --exclude='node_modules' \
+  --exclude='data' \
+  --exclude='*.log' \
+  --exclude='tests' \
+  ~/Consilium/hierarchical-memory/ ~/clawd/council/hierarchical-memory/
 ```
+
+## Safety Notes
+
+- Never sync `data/` from DEV to PROD.
+- Runtime memory state is environment-local (`store.json`, `messages/*.jsonl`, `CONTEXT.md`).
+- Watcher process has per-agent lock file: `data/<agentId>/watch.pid`.

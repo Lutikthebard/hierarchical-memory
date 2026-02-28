@@ -6,6 +6,11 @@ const {
   commandAllowed,
   isClassIncludedForTarget
 } = require('./message-classifier');
+const {
+  safeStringify,
+  extractSessionsSendToolResultPayload,
+  buildSessionsSendResultContent
+} = require('./shared/inter-agent');
 
 /**
  * Shared JSONL message parser for watchers and related services.
@@ -18,12 +23,90 @@ function extractContent(content) {
 
   if (Array.isArray(content)) {
     return content
-      .filter((item) => item.type === 'text')
-      .map((item) => item.text)
+      .map((item) => {
+        if (!item || typeof item !== 'object') return '';
+
+        if (item.type === 'text' && typeof item.text === 'string') {
+          return item.text;
+        }
+
+        if ((item.type === 'thinking' || item.type === 'reasoning') && typeof item.thinking === 'string') {
+          return `<think>${item.thinking}</think>`;
+        }
+
+        return '';
+      })
+      .filter(Boolean)
       .join('\n');
   }
 
   return '';
+}
+
+function extractSessionsSendToolCall(msg) {
+  if (msg?.role !== 'assistant' || !Array.isArray(msg.content)) {
+    return null;
+  }
+
+  const toolCall = msg.content.find((item) =>
+    item &&
+    item.type === 'toolCall' &&
+    item.name === 'sessions_send' &&
+    item.arguments &&
+    typeof item.arguments === 'object'
+  );
+  if (!toolCall) return null;
+
+  const args = toolCall.arguments || {};
+  const target = typeof args.sessionKey === 'string' ? args.sessionKey.trim() : '';
+  const rawMessage = typeof args.message === 'string'
+    ? args.message
+    : safeStringify(args.message);
+  const outboundText = normalizeText(rawMessage);
+  const content = target
+    ? `[sessions_send -> ${target}] ${outboundText}`
+    : `[sessions_send] ${outboundText}`;
+
+  return {
+    role: 'assistant',
+    content,
+    messageClass: 'inter_agent',
+    shouldCount: false,
+    direction: 'outgoing',
+    toSessionKey: target || null,
+    fromSessionKey: msg.sessionKey || null,
+    toolName: 'sessions_send',
+    toolCallId: toolCall.id || null,
+    runId: null,
+    status: null,
+    sourceType: 'toolCall'
+  };
+}
+
+function extractSessionsSendToolResult(msg) {
+  const payload = extractSessionsSendToolResultPayload(msg);
+  if (!payload) return null;
+  const target = payload.sessionKey || 'unknown';
+  const content = buildSessionsSendResultContent(target, payload.status, payload.runId, payload.replyText);
+
+  return {
+    role: 'assistant',
+    content,
+    messageClass: 'inter_agent',
+    shouldCount: false,
+    direction: 'result',
+    toSessionKey: payload.sessionKey || null,
+    fromSessionKey: msg.sessionKey || null,
+    toolName: 'sessions_send',
+    toolCallId: msg.toolCallId || null,
+    runId: payload.runId || null,
+    status: payload.status || null,
+    sourceType: 'toolResult'
+  };
+}
+
+function extractInterAgentEvent(msg) {
+  return extractSessionsSendToolCall(msg) || extractSessionsSendToolResult(msg);
 }
 
 function parseMessage(line, agentConfig = null) {
@@ -47,13 +130,24 @@ function parseMessage(line, agentConfig = null) {
     if (data.type !== 'message') return null;
 
     const msg = data.message || data;
-    const role = msg.role;
+    const timestamp = msg.timestamp || data.timestamp || data.ts;
+    const ts = timestamp
+      ? new Date(typeof timestamp === 'number' ? timestamp : timestamp).toISOString()
+      : new Date().toISOString();
+
+    const interAgent = extractInterAgentEvent(msg);
+    const parsed = interAgent || {
+      role: msg.role,
+      content: normalizeText(extractContent(msg.content)),
+      messageClass: null
+    };
+    const role = parsed.role;
     if (!filters.storeRoles.includes(role)) return null;
 
-    const content = normalizeText(extractContent(msg.content));
+    const content = normalizeText(parsed.content);
     if (!content) return null;
 
-    const messageClass = classifyMessage(role, content);
+    const messageClass = parsed.messageClass || classifyMessage(role, content);
     if (!isClassIncludedForTarget(messageClass, classFilters, 'store')) return null;
     if (!commandAllowed(content, classFilters.commandAllowlist)) return null;
 
@@ -69,20 +163,30 @@ function parseMessage(line, agentConfig = null) {
       }
     }
 
-    const timestamp = msg.timestamp || data.timestamp || data.ts;
-    const ts = timestamp
-      ? new Date(typeof timestamp === 'number' ? timestamp : timestamp).toISOString()
-      : new Date().toISOString();
-
-    return {
+    const base = {
       role,
       content,
       timestamp: ts,
-      messageClass,
-      shouldCount: filters.countRoles.includes(role) &&
-        isClassIncludedForTarget(messageClass, classFilters, 'count') &&
-        commandAllowed(content, classFilters.commandAllowlist)
+      messageClass
     };
+
+    if (!interAgent) {
+      base.shouldCount = filters.countRoles.includes(role) &&
+        isClassIncludedForTarget(messageClass, classFilters, 'count') &&
+        commandAllowed(content, classFilters.commandAllowlist);
+      return base;
+    }
+
+    base.shouldCount = false;
+    base.direction = interAgent.direction || null;
+    base.fromSessionKey = interAgent.fromSessionKey || null;
+    base.toSessionKey = interAgent.toSessionKey || null;
+    base.toolName = interAgent.toolName || null;
+    base.toolCallId = interAgent.toolCallId || null;
+    base.runId = interAgent.runId || null;
+    base.status = interAgent.status || null;
+    base.sourceType = interAgent.sourceType || null;
+    return base;
   } catch (_e) {
     return null;
   }

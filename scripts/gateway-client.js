@@ -6,31 +6,44 @@
  * ENV:
  *   GATEWAY_URL=ws://127.0.0.1:18789
  *   GATEWAY_TOKEN=... (gateway auth token from config)
+ *   GATEWAY_PASSWORD=... (gateway auth password from config)
  */
 
 const WebSocket = require('ws');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const {
+  extractTextContent,
+  normalizeWhitespace,
+  extractTimestampMs,
+  isNewestFirst,
+  sourceTextMatchesCandidate,
+  findArtifactInHistory
+} = require('./gateway/artifact-extract');
+const { waitForArtifactResponse } = require('./gateway/history');
 
 const DEFAULT_TIMEOUT_MS = 30000;
 const OPENCLAW_DIR = path.join(process.env.HOME, '.openclaw');
 
 /**
- * Load gateway token from config if not provided
+ * Load gateway auth credentials from config if not provided
  */
-function loadGatewayToken() {
+function loadGatewayAuth() {
   const configPath = path.join(OPENCLAW_DIR, 'openclaw.json');
   
   if (!fs.existsSync(configPath)) {
-    return null;
+    return { token: null, password: null };
   }
   
   try {
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    return config.gateway?.auth?.token || null;
+    return {
+      token: config.gateway?.auth?.token || null,
+      password: config.gateway?.auth?.password || null
+    };
   } catch {
-    return null;
+    return { token: null, password: null };
   }
 }
 
@@ -74,9 +87,11 @@ function loadDeviceIdentity() {
 }
 
 class OpenClawClient {
-  constructor(url, token) {
+  constructor(url, token, options = {}) {
+    const configAuth = loadGatewayAuth();
     this.url = url;
-    this.token = token || loadGatewayToken();
+    this.token = token || configAuth.token || null;
+    this.password = options.gatewayPassword ?? process.env.GATEWAY_PASSWORD ?? configAuth.password ?? null;
     this.ws = null;
     this.pending = new Map(); // id -> {resolve, reject, timeout}
     this.connected = false;
@@ -85,12 +100,17 @@ class OpenClawClient {
     // Event handlers (set by consumer)
     this.onChatMessage = null;
     this.onDisconnect = null;
+
+    // Diagnostic metadata from last sendToAgent call
+    this._lastCaptureInfo = null;
     
     // Connection state
     this.connectNonce = null;
+    this.postWaitPollIntervalMs = options.postWaitPollIntervalMs ?? 1500;
+    this.postWaitWindowMs = options.postWaitWindowMs ?? 12000;
     
-    if (!this.token) {
-      console.warn('[gateway-client] Warning: No gateway token found');
+    if (!this.token && !this.password) {
+      console.warn('[gateway-client] Warning: No gateway credentials found (token/password)');
     }
   }
 
@@ -234,6 +254,10 @@ class OpenClawClient {
       };
     }
     
+    const auth = {};
+    if (this.token) auth.token = this.token;
+    if (this.password) auth.password = this.password;
+
     const connectReq = {
       type: 'req',
       id: this._id(),
@@ -252,7 +276,7 @@ class OpenClawClient {
         caps: [],
         commands: [],
         permissions: {},
-        auth: this.token ? { token: this.token } : undefined,
+        auth: Object.keys(auth).length > 0 ? auth : undefined,
         locale: 'ru-RU',
         userAgent: 'hierarchical-memory/2.0.0',
         device: device
@@ -317,99 +341,61 @@ class OpenClawClient {
   }
 
   /**
-   * Subscribe to chat messages for a session
+   * Send message to agent session and wait for response.
+   * Uses chat.send + agent.wait, then polls chat.history for artifact response.
    */
-  async subscribeToChat(sessionKey) {
-    await this.rpc('chat.subscribe', { sessionKey });
-  }
-
-  /**
-   * Send message to agent session and wait for response
-   * Uses chat.send + agent.wait with agent:agentId session
-   */
-  async sendToAgent(agentId, message, timeoutSeconds = 120) {
+  async sendToAgent(agentId, message, timeoutSeconds = 120, sessionKeyOverride = null, expectedLevel = null) {
     const crypto = require('crypto');
-    const sessionKey = `agent:${agentId}:main`;
+    const sessionKey = sessionKeyOverride || `agent:${agentId}:main`;
     const timeoutMs = timeoutSeconds * 1000;
-    
+
     console.log('[gateway-client] sendToAgent called');
     console.log('[gateway-client]   agentId:', agentId);
     console.log('[gateway-client]   sessionKey:', sessionKey);
     console.log('[gateway-client]   message length:', message.length);
     console.log('[gateway-client]   message preview:', message.substring(0, 100));
-    
-    // 1. Send message to agent session
+    if (Number.isInteger(Number(expectedLevel)) && Number(expectedLevel) > 0) {
+      console.log('[gateway-client]   expected artifact level:', Number(expectedLevel));
+    }
+
     try {
+      // 1. Send message to agent session
       console.log('[gateway-client] Step 1: Calling chat.send...');
-      console.log('[gateway-client]   → Sending to sessionKey:', sessionKey);
       const sendResult = await this.rpc('chat.send', {
         sessionKey,
         message,
         idempotencyKey: crypto.randomUUID(),
         timeoutMs
       }, timeoutMs + 30000);
-      
+
       console.log('[gateway-client] chat.send result:', JSON.stringify(sendResult, null, 2));
-      
+
       if (!sendResult.runId) {
         throw new Error('No runId returned from chat.send');
       }
-      
+
       // 2. Wait for completion
       console.log('[gateway-client] Step 2: Waiting for completion (runId:', sendResult.runId, ')...');
       const waitResult = await this.rpc('agent.wait', {
         runId: sendResult.runId,
         timeoutMs
       }, timeoutMs + 30000);
-      
+
       console.log('[gateway-client] agent.wait result:', JSON.stringify(waitResult, null, 2));
-      
-      // 3. Get history to extract response
-      console.log('[gateway-client] Step 3: Fetching chat history...');
-      const history = await this.rpc('chat.history', {
-        sessionKey,
-        limit: 15
-      }, 10000);
-      
-      console.log('[gateway-client] chat.history returned', history.messages?.length || 0, 'messages');
-      
-      // History is NEWEST-FIRST, so response is at i-1 (before user message in array)
-      // Normalize whitespace since Gateway may collapse newlines to spaces
-      const messages = history.messages || [];
-      const normalizeWs = (s) => s.replace(/\s+/g, ' ').trim();
-      const searchText = normalizeWs(message.substring(0, Math.min(80, message.length)));
-      
-      console.log('[gateway-client] Searching for response...');
-      console.log('[gateway-client]   searchText:', searchText.substring(0, 60));
-      
-      for (let i = 1; i < messages.length; i++) {
-        if (messages[i].role === 'user') {
-          const rawText = this._extractTextContent(messages[i].content);
-          const textNorm = normalizeWs(rawText.substring(0, 100));
-          console.log('[gateway-client]   Checking message', i, ':', textNorm.substring(0, 60));
-          if (textNorm.includes(searchText.substring(0, 40))) {
-            console.log('[gateway-client]   ✅ Found our message at index', i);
-            // Search for assistant response with <memory_artifact> in last 10 messages
-            for (let j = i - 1; j >= Math.max(0, i - 10); j--) {
-              if (messages[j]?.role === 'assistant') {
-                const response = this._extractTextContent(messages[j].content);
-                if (response.includes('<memory_artifact>')) {
-                  console.log('[gateway-client]   ✅ Found response with artifact at index', j, ', length:', response.length);
-                  console.log('[gateway-client]   Response preview:', response.substring(0, 100));
-                  return response;
-                }
-                console.log('[gateway-client]   ⏭️  Skipping assistant at index', j, '(no artifact tag)');
-              }
-            }
-            console.log('[gateway-client]   ❌ No assistant response with <memory_artifact> found in range', i - 1, 'to', Math.max(0, i - 10));
-          }
-        }
+
+      // 3. Poll chat history for artifact response
+      console.log('[gateway-client] Step 3: Waiting for artifact in chat history...');
+      const artifact = await this._waitForArtifactResponse(sessionKey, message, expectedLevel);
+      if (!artifact) {
+        console.log('[gateway-client] ❌ No artifact found in chat history');
+        this._lastCaptureInfo = { method: 'history', collectedCount: 0 };
+        return '';
       }
-      
-      // Fallback: return empty if not found
-      console.log('[gateway-client] ❌ No response found in history');
-      return '';
-      
+
+      console.log('[gateway-client] ✅ Found artifact via chat history, length:', artifact.length);
+      this._lastCaptureInfo = { method: 'history', collectedCount: 1 };
+      return artifact;
+
     } catch (error) {
       console.error('[gateway-client] ❌ Error in sendToAgent:', error.message);
       console.error('[gateway-client] Error stack:', error.stack);
@@ -493,16 +479,39 @@ class OpenClawClient {
    * Extract text content from message content
    */
   _extractTextContent(content) {
-    if (typeof content === 'string') {
-      return content;
-    }
-    if (Array.isArray(content)) {
-      return content
-        .filter(c => c.type === 'text')
-        .map(c => c.text)
-        .join('\n');
-    }
-    return '';
+    return extractTextContent(content);
+  }
+
+  _normalizeWhitespace(value) {
+    return normalizeWhitespace(value);
+  }
+
+  _extractTimestampMs(message) {
+    return extractTimestampMs(message);
+  }
+
+  _isNewestFirst(messages) {
+    return isNewestFirst(messages);
+  }
+
+  _sourceTextMatchesCandidate(candidateText, sourceMessage) {
+    return sourceTextMatchesCandidate(candidateText, sourceMessage);
+  }
+
+  _findArtifactInHistory(messages, sourceMessage, expectedLevel = null) {
+    return findArtifactInHistory(messages, sourceMessage, console, expectedLevel);
+  }
+
+  async _waitForArtifactResponse(sessionKey, message, expectedLevel = null) {
+    return waitForArtifactResponse({
+      rpc: this.rpc.bind(this),
+      sessionKey,
+      message,
+      expectedLevel,
+      postWaitWindowMs: this.postWaitWindowMs,
+      postWaitPollIntervalMs: this.postWaitPollIntervalMs,
+      logger: console
+    });
   }
 
   /**

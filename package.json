@@ -1,5 +1,22 @@
 {
+  "name": "hierarchical-memory",
+  "private": true,
+  "scripts": {
+    "test": "npm run test:offline",
+    "test:offline": "HM_LLM_MODE=mock node --test --test-concurrency=1 tests/*.test.js",
+    "test:multiagent:offline": "HM_LLM_MODE=mock node --test tests/multiagent-offline.test.js",
+    "demo:multiagent:offline": "node scripts/demo-multiagent-offline.js",
+    "demo:view:offline": "node scripts/demo-view-offline.js",
+    "loadtest:offline": "node scripts/load-test-offline.js",
+    "e2e:real": "bash scripts/dev/run-real-e2e.sh",
+    "e2e:real:stop": "bash scripts/dev/stop-real-e2e.sh",
+    "test:watch": "node --test --watch tests/*.test.js",
+    "dev": "node web/server.js"
+  },
   "dependencies": {
     "undici": "^7.20.0"
+  },
+  "engines": {
+    "node": ">=20.18.1"
   }
 }

@@ -15,18 +15,56 @@
  *   GATEWAY_TOKEN=... (if auth enabled)
  */
 
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
 const { createLLMAdapterFromEnv } = require('./llm-adapter');
 const {
   loadStore,
   saveStore,
   addArtifact,
+  selectSummarizationBatch,
   checkThreshold,
   getThresholdForLevel,
   formatTimestamp,
-  loadAgentConfig
+  loadAgentConfig,
+  getDataDir
 } = require('./store');
 let llmAdapter = null;
 let adapterMode = 'openclaw';
+
+function setAdapter(adapter, mode = 'custom') {
+  llmAdapter = adapter || null;
+  adapterMode = mode;
+}
+
+function safePreview(text, maxLen = 240) {
+  const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+  if (normalized.length <= maxLen) return normalized;
+  return `${normalized.slice(0, maxLen)}...`;
+}
+
+function getArtifactTagName(level) {
+  const normalizedLevel = Number(level);
+  if (!Number.isInteger(normalizedLevel) || normalizedLevel < 1) {
+    throw new Error(`Invalid artifact level: ${level}`);
+  }
+  return `memory_artifact_L${normalizedLevel}`;
+}
+
+function getTelemetryPath(agentId) {
+  return path.join(getDataDir(), agentId, 'summarization-events.jsonl');
+}
+
+function logTelemetry(agentId, payload) {
+  const telemetryPath = getTelemetryPath(agentId);
+  fs.mkdirSync(path.dirname(telemetryPath), { recursive: true });
+  const line = JSON.stringify({
+    timestamp: new Date().toISOString(),
+    ...payload
+  });
+  fs.appendFileSync(telemetryPath, `${line}\n`, 'utf8');
+}
 
 /**
  * Create L1 summarization prompt
@@ -42,6 +80,8 @@ function createL1Prompt(messages, agentConfig = null) {
   const promptInstructions = customPrompt ||
     'Summarize messages into a concise memory artifact. Focus on: decisions made, problems solved, key insights, action items. Use markdown headers for structure. Be concise but complete.';
   
+  const artifactTag = getArtifactTagName(1);
+
   return `🧠 MEMORY TASK: This is a system message.
 
 Summarize ${messages.length} messages from: ${startFormatted} → ${endFormatted}.
@@ -50,7 +90,7 @@ ${promptInstructions}
 
 Your answer to this message will be stored as a summary.
 
-Wrap your entire response in <memory_artifact>...</memory_artifact> tags.
+Wrap your entire response in <${artifactTag}>...</${artifactTag}> tags.
   Reply with ONLY the summary inside the tags.
   Add NO_REPLY at the end of the message.`;
 }
@@ -72,6 +112,8 @@ function createAggregationPrompt(artifacts, sourceLevel, targetLevel, agentConfi
   const promptInstructions = customPrompt ||
     `Create a concise higher-level memory artifact from L${sourceLevel} summaries. Focus on: recurring themes, major decisions, unresolved issues, durable insights. Use markdown headers for structure. Be concise but complete.`;
   
+  const artifactTag = getArtifactTagName(targetLevel);
+
   return `🧠 MEMORY TASK: This is a system message.
 
 Aggregate ${artifacts.length} L${sourceLevel} summaries into L${targetLevel} for: ${startFormatted} → ${endFormatted}.
@@ -82,7 +124,7 @@ ${promptInstructions}
 
 Your answer to this message will be stored as a summary.
 
-Wrap your entire response in <memory_artifact>...</memory_artifact> tags.
+Wrap your entire response in <${artifactTag}>...</${artifactTag}> tags.
   Reply with ONLY the summary inside the tags.
   Add NO_REPLY at the end of the message.`;
 }
@@ -97,21 +139,23 @@ function createRetryPrompt(errorMessage, previousResponse, originalPrompt) {
 }
 
 /**
- * Parse agent response - extract content from <memory_artifact> tags
+ * Parse agent response - extract content from <memory_artifact_L{N}> tags
  */
-function parseAgentResponse(text) {
+function parseAgentResponse(text, expectedLevel) {
   if (!text || text.trim().length === 0) {
     throw new Error('Empty response');
   }
-  
-  // Extract content from <memory_artifact> tags
-  const match = text.match(/<memory_artifact>([\s\S]*?)<\/memory_artifact>/);
+
+  const artifactTag = getArtifactTagName(expectedLevel);
+  const pattern = new RegExp(`<${artifactTag}>([\\s\\S]*?)<\\/${artifactTag}>`);
+
+  // Extract content from level-specific artifact tags
+  const match = text.match(pattern);
   if (match) {
     return match[1].trim();
   }
-  
-  // Fallback: if no tags, return trimmed text (for backwards compatibility)
-  return text.trim();
+
+  throw new Error(`Missing required artifact tag <${artifactTag}>...</${artifactTag}>`);
 }
 
 function getAdapter() {
@@ -134,13 +178,15 @@ async function closeAdapter() {
 /**
  * Send message to agent via sessions.send and wait for response
  */
-async function sendToAgent(agentId, message) {
+async function sendToAgent(agentId, message, sessionKey = null, targetLevel = null) {
   console.log(`[trigger] Sending to agent: ${agentId}`);
-  const reply = await getAdapter().send(agentId, message);
-  
-  console.log(`[trigger] Got response (${reply.length} chars)`);
-  
-  return reply;
+  const adapter = getAdapter();
+  const reply = await adapter.send(agentId, message, { sessionKey, targetLevel });
+  const captureInfo = adapter.lastCaptureInfo;
+
+  console.log(`[trigger] Got response (${reply.length} chars, capture: ${captureInfo?.method ?? 'unknown'}, collected: ${captureInfo?.collectedCount ?? '?'})`);
+
+  return { reply, captureInfo };
 }
 
 /**
@@ -227,21 +273,50 @@ async function handleL1(agentId, sessionKey) {
   // Load agent-specific config
   const agentConfig = loadAgentConfig(agentId);
   const threshold = agentConfig.thresholds?.L1 || getThresholdForLevel(1);
+  const requestId = crypto.randomUUID();
   
   const store = loadStore(agentId);
-  const check = checkThreshold(store, 0, threshold);
+  const selected = selectSummarizationBatch(store, 0, threshold, agentId);
+  const available = selected.countable ?? selected.items.length;
   
-  if (!check.needed) {
-    console.log(`❌ Not ready: ${check.items.length}/${threshold} messages`);
+  if (!selected.needed) {
+    logTelemetry(agentId, {
+      eventType: 'memory_task_skipped',
+      requestId,
+      taskKind: 'l1',
+      sourceLevel: 0,
+      targetLevel: 1,
+      reason: 'threshold_not_met',
+      threshold,
+      availableCount: available,
+      selectedCount: 0
+    });
+    console.log(`❌ Not ready: ${available}/${threshold} messages`);
     return;
   }
   
-  const messages = check.items;
+  const messages = selected.batch;
   const startTs = messages[0].timestamp;
   const endTs = messages[messages.length - 1].timestamp;
+  const selectedCountable = Array.isArray(selected.countableBatch) ? selected.countableBatch.length : messages.length;
   
   console.log(`[trigger] L1 trigger: ${messages.length} messages`);
+  if (Number.isFinite(selected.countable)) {
+    console.log(`[trigger] Countable available: ${selected.countable}, selected: ${selected.countableBatch.length}`);
+  }
   console.log(`[trigger] Time range: ${formatTimestamp(startTs)} → ${formatTimestamp(endTs)}`);
+  logTelemetry(agentId, {
+    eventType: 'memory_task_started',
+    requestId,
+    taskKind: 'l1',
+    sourceLevel: 0,
+    targetLevel: 1,
+    threshold,
+    availableCount: available,
+    selectedCount: selectedCountable,
+    windowStart: startTs,
+    windowEnd: endTs
+  });
   
   // Create initial prompt with agent config
   const originalPrompt = createL1Prompt(messages, agentConfig);
@@ -255,21 +330,68 @@ async function handleL1(agentId, sessionKey) {
   
   while (retries < MAX_RETRIES) {
     try {
-      console.log(`[trigger] Attempt ${retries + 1}/${MAX_RETRIES}`);
-      responseText = await sendToAgent(agentId, currentPrompt);
-      
+      const attempt = retries + 1;
+      console.log(`[trigger] Attempt ${attempt}/${MAX_RETRIES}`);
+      logTelemetry(agentId, {
+        eventType: 'memory_task_sent',
+        requestId,
+        taskKind: 'l1',
+        sourceLevel: 0,
+        targetLevel: 1,
+        threshold,
+        selectedCount: selectedCountable,
+        windowStart: startTs,
+        windowEnd: endTs,
+        attempt,
+        promptHash: crypto.createHash('sha1').update(currentPrompt).digest('hex'),
+        promptPreview: safePreview(currentPrompt)
+      });
+      const sendResult = await sendToAgent(agentId, currentPrompt, sessionKey, 1);
+      responseText = sendResult.reply;
+      logTelemetry(agentId, {
+        eventType: 'memory_task_response',
+        requestId,
+        taskKind: 'l1',
+        sourceLevel: 0,
+        targetLevel: 1,
+        attempt,
+        responseLength: String(responseText || '').length,
+        responsePreview: safePreview(responseText),
+        captureMethod: sendResult.captureInfo?.method ?? null,
+        captureCollectedCount: sendResult.captureInfo?.collectedCount ?? null
+      });
+
       // Parse artifact
-      artifact = parseAgentResponse(responseText);
+      artifact = parseAgentResponse(responseText, 1);
       console.log('[trigger] ✅ Successfully parsed artifact');
       break;
       
     } catch (error) {
       retries++;
+      logTelemetry(agentId, {
+        eventType: 'memory_task_attempt_failed',
+        requestId,
+        taskKind: 'l1',
+        sourceLevel: 0,
+        targetLevel: 1,
+        attempt: retries,
+        error: error.message
+      });
       console.error(`[trigger] ❌ Attempt ${retries} failed: ${error.message}`);
       
       if (retries >= MAX_RETRIES) {
         console.error('[trigger] Max retries reached, giving up');
         console.error('[trigger] Last response:', responseText ? responseText.substring(0, 500) : 'No response');
+        logTelemetry(agentId, {
+          eventType: 'artifact_failed',
+          requestId,
+          taskKind: 'l1',
+          sourceLevel: 0,
+          targetLevel: 1,
+          attemptsSent: retries,
+          windowStart: startTs,
+          windowEnd: endTs
+        });
         return;
       }
       
@@ -280,7 +402,7 @@ async function handleL1(agentId, sessionKey) {
   }
   
   // Add to store - use known timestamps, artifact is just the content text
-  addArtifact(store, 1, {
+  const createdArtifact = addArtifact(store, 1, {
     content: artifact,  // artifact is now just the summary text
     startTimestamp: startTs,
     endTimestamp: endTs,
@@ -288,6 +410,19 @@ async function handleL1(agentId, sessionKey) {
   });
   
   saveStore(agentId, store);
+  logTelemetry(agentId, {
+    eventType: createdArtifact ? 'artifact_processed' : 'artifact_duplicate',
+    requestId,
+    taskKind: 'l1',
+    sourceLevel: 0,
+    targetLevel: 1,
+    attemptsBeforeProcessed: retries + 1,
+    attemptsSent: retries + 1,
+    artifactId: createdArtifact?.artifactId || null,
+    windowStart: startTs,
+    windowEnd: endTs,
+    selectedCount: selectedCountable
+  });
   
   console.log('[trigger] ✅ L1 artifact created');
   console.log(`[trigger]    Time range: ${formatTimestamp(startTs)} → ${formatTimestamp(endTs)}`);
@@ -303,22 +438,46 @@ async function handleAggregate(agentId, sessionKey, sourceLevel) {
   // Load agent-specific config
   const agentConfig = loadAgentConfig(agentId);
   const threshold = agentConfig.thresholds?.default || getThresholdForLevel(sourceLevel + 1);
+  const targetLevel = sourceLevel + 1;
+  const requestId = crypto.randomUUID();
   
   const store = loadStore(agentId);
-  const check = checkThreshold(store, sourceLevel, threshold);
+  const selected = selectSummarizationBatch(store, sourceLevel, threshold);
   
-  if (!check.needed) {
-    console.log(`❌ Not ready: ${check.items.length}/${threshold} artifacts at L${sourceLevel}`);
+  if (!selected.needed) {
+    logTelemetry(agentId, {
+      eventType: 'memory_task_skipped',
+      requestId,
+      taskKind: 'aggregate',
+      sourceLevel,
+      targetLevel,
+      reason: 'threshold_not_met',
+      threshold,
+      availableCount: selected.items.length,
+      selectedCount: 0
+    });
+    console.log(`❌ Not ready: ${selected.items.length}/${threshold} artifacts at L${sourceLevel}`);
     return;
   }
   
-  const artifacts = check.items;
-  const targetLevel = sourceLevel + 1;
+  const artifacts = selected.batch;
   const startTs = artifacts[0].startTimestamp;
   const endTs = artifacts[artifacts.length - 1].endTimestamp;
   
   console.log(`[trigger] Aggregation: ${artifacts.length} L${sourceLevel} artifacts`);
   console.log(`[trigger] Time range: ${formatTimestamp(startTs)} → ${formatTimestamp(endTs)}`);
+  logTelemetry(agentId, {
+    eventType: 'memory_task_started',
+    requestId,
+    taskKind: 'aggregate',
+    sourceLevel,
+    targetLevel,
+    threshold,
+    availableCount: selected.items.length,
+    selectedCount: artifacts.length,
+    windowStart: startTs,
+    windowEnd: endTs
+  });
   
   // Create initial prompt with agent config
   const originalPrompt = createAggregationPrompt(artifacts, sourceLevel, targetLevel, agentConfig);
@@ -332,19 +491,67 @@ async function handleAggregate(agentId, sessionKey, sourceLevel) {
   
   while (retries < MAX_RETRIES) {
     try {
-      console.log(`[trigger] Attempt ${retries + 1}/${MAX_RETRIES}`);
-      responseText = await sendToAgent(agentId, currentPrompt);
-      
-      artifact = parseAgentResponse(responseText);
+      const attempt = retries + 1;
+      console.log(`[trigger] Attempt ${attempt}/${MAX_RETRIES}`);
+      logTelemetry(agentId, {
+        eventType: 'memory_task_sent',
+        requestId,
+        taskKind: 'aggregate',
+        sourceLevel,
+        targetLevel,
+        threshold,
+        selectedCount: artifacts.length,
+        windowStart: startTs,
+        windowEnd: endTs,
+        attempt,
+        promptHash: crypto.createHash('sha1').update(currentPrompt).digest('hex'),
+        promptPreview: safePreview(currentPrompt)
+      });
+      const sendResult = await sendToAgent(agentId, currentPrompt, sessionKey, targetLevel);
+      responseText = sendResult.reply;
+      logTelemetry(agentId, {
+        eventType: 'memory_task_response',
+        requestId,
+        taskKind: 'aggregate',
+        sourceLevel,
+        targetLevel,
+        attempt,
+        responseLength: String(responseText || '').length,
+        responsePreview: safePreview(responseText),
+        captureMethod: sendResult.captureInfo?.method ?? null,
+        captureCollectedCount: sendResult.captureInfo?.collectedCount ?? null
+      });
+
+      artifact = parseAgentResponse(responseText, targetLevel);
       console.log('[trigger] ✅ Successfully parsed artifact');
       break;
       
     } catch (error) {
       retries++;
+      logTelemetry(agentId, {
+        eventType: 'memory_task_attempt_failed',
+        requestId,
+        taskKind: 'aggregate',
+        sourceLevel,
+        targetLevel,
+        attempt: retries,
+        error: error.message
+      });
       console.error(`[trigger] ❌ Attempt ${retries} failed: ${error.message}`);
       
       if (retries >= MAX_RETRIES) {
         console.error('[trigger] Max retries reached, giving up');
+        logTelemetry(agentId, {
+          eventType: 'artifact_failed',
+          requestId,
+          taskKind: 'aggregate',
+          sourceLevel,
+          targetLevel,
+          attemptsSent: retries,
+          windowStart: startTs,
+          windowEnd: endTs,
+          selectedCount: artifacts.length
+        });
         return;
       }
       
@@ -354,7 +561,7 @@ async function handleAggregate(agentId, sessionKey, sourceLevel) {
   }
   
   // Add to store - use known timestamps, artifact is just the content text
-  addArtifact(store, targetLevel, {
+  const createdArtifact = addArtifact(store, targetLevel, {
     content: artifact,  // artifact is now just the summary text
     startTimestamp: startTs,
     endTimestamp: endTs,
@@ -363,6 +570,19 @@ async function handleAggregate(agentId, sessionKey, sourceLevel) {
   });
   
   saveStore(agentId, store);
+  logTelemetry(agentId, {
+    eventType: createdArtifact ? 'artifact_processed' : 'artifact_duplicate',
+    requestId,
+    taskKind: 'aggregate',
+    sourceLevel,
+    targetLevel,
+    attemptsBeforeProcessed: retries + 1,
+    attemptsSent: retries + 1,
+    artifactId: createdArtifact?.artifactId || null,
+    windowStart: startTs,
+    windowEnd: endTs,
+    selectedCount: artifacts.length
+  });
   
   console.log(`[trigger] ✅ L${targetLevel} artifact created`);
   console.log(`[trigger]    Time range: ${formatTimestamp(startTs)} → ${formatTimestamp(endTs)}`);
@@ -434,8 +654,20 @@ async function main() {
   }
 }
 
-main().catch(err => {
-  console.error('Fatal error:', err);
-  closeAdapter().catch(() => {});
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch(err => {
+    console.error('Fatal error:', err);
+    closeAdapter().catch(() => {});
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  createL1Prompt,
+  createAggregationPrompt,
+  parseAgentResponse,
+  setAdapter,
+  handleL1,
+  handleAggregate,
+  closeAdapter
+};

@@ -6,5 +6,8 @@
   "contextOverlap": 1,
   "includeTimestamps": true,
   "dataDir": "./data",
-  "startFromTimestamp": "2026-02-03T12:45:00.000Z"
+  "startFromTimestamp": "2026-02-03T12:45:00.000Z",
+  "autoCompact": {
+    "postCompactMessage": "Do not retain anything. The context will be provided in the next message. Load the required files SOUL.md and AGENTS.md, then continue the conversation from the same point."
+  }
 }

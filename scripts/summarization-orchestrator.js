@@ -6,8 +6,11 @@ function createSummarizationOrchestrator(deps) {
 
   const {
     scriptDir,
+    triggerApi,
+    resolveSessionKey,
     loadStore,
     saveStore,
+    loadAgentConfig,
     archiveMessages,
     removeSummarizedMessages,
     getLastSummarizedTimestamp,
@@ -17,28 +20,45 @@ function createSummarizationOrchestrator(deps) {
     getContextPath
   } = deps;
 
+  function resolveThreshold(agentId, level) {
+    const agentConfig = loadAgentConfig ? loadAgentConfig(agentId) : null;
+    const explicitLevel = agentConfig?.thresholds?.[`L${level}`];
+    if (Number.isFinite(Number(explicitLevel)) && Number(explicitLevel) > 0) {
+      return Number(explicitLevel);
+    }
+
+    if (level === 1) {
+      const l1 = agentConfig?.thresholds?.L1;
+      if (Number.isFinite(Number(l1)) && Number(l1) > 0) {
+        return Number(l1);
+      }
+    }
+
+    const fallbackDefault = agentConfig?.thresholds?.default;
+    if (Number.isFinite(Number(fallbackDefault)) && Number(fallbackDefault) > 0) {
+      return Number(fallbackDefault);
+    }
+
+    return getThresholdForLevel(level);
+  }
+
   async function runSummarization(agentId, sourceLevel) {
     const timestamp = new Date().toISOString();
 
     try {
       console.log(`[${timestamp}] Running trigger-ws.js...`);
-
-      const triggerCmd = sourceLevel === 0
-        ? `node ${scriptDir}/trigger-ws.js l1 ${agentId} ${agentId}`
-        : `node ${scriptDir}/trigger-ws.js aggregate ${agentId} ${agentId} ${sourceLevel}`;
-
-      const { stdout: triggerOut, stderr: triggerErr } = await execAsync(triggerCmd, {
-        cwd: scriptDir,
-        maxBuffer: 10 * 1024 * 1024,
-        timeout: 360000
-      });
-
-      if (triggerOut) {
-        console.log('✅ Trigger.js output:');
-        console.log(triggerOut);
+      if (!triggerApi || typeof triggerApi.handleL1 !== 'function' || typeof triggerApi.handleAggregate !== 'function') {
+        throw new Error('triggerApi is required (fallback execution path removed)');
       }
-      if (triggerErr) {
-        console.error('⚠️  Trigger.js stderr:', triggerErr);
+      if (typeof resolveSessionKey !== 'function') {
+        throw new Error('resolveSessionKey is required (fallback execution path removed)');
+      }
+
+      const sessionKey = resolveSessionKey(agentId);
+      if (sourceLevel === 0) {
+        await triggerApi.handleL1(agentId, sessionKey);
+      } else {
+        await triggerApi.handleAggregate(agentId, sessionKey, sourceLevel);
       }
 
       console.log(`\n[${new Date().toISOString()}] Generating CONTEXT.md...`);
@@ -80,11 +100,12 @@ function createSummarizationOrchestrator(deps) {
       }
 
       const targetLevel = sourceLevel + 1;
-      const nextThreshold = getThresholdForLevel(targetLevel + 1);
+      const nextLevel = targetLevel + 1;
+      const nextThreshold = resolveThreshold(agentId, nextLevel);
       const nextCheck = checkThreshold(updatedStore, targetLevel, nextThreshold);
 
       if (nextCheck.needed) {
-        console.log(`\n🔄 Recursive check: L${targetLevel}→L${targetLevel + 1} also ready (${nextCheck.items.length}/${nextThreshold})`);
+        console.log(`\n🔄 Recursive check: L${targetLevel}→L${nextLevel} also ready (${nextCheck.items.length}/${nextThreshold})`);
         console.log('   → Starting recursive summarization...\n');
         const recursiveStore = await runSummarization(agentId, targetLevel);
         return recursiveStore || updatedStore;

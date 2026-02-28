@@ -16,6 +16,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { clampArtifactsToParentRange } = require('../web/services/artifact-levels');
 const {
     loadStore,
     loadConfig,
@@ -44,8 +45,20 @@ function formatMessages(messages, includeTimestamps) {
         const timestamp = includeTimestamps && msg.timestamp 
             ? `[${formatTimestamp(msg.timestamp)}] ` 
             : '';
+        if (msg.messageClass === 'inter_agent' || msg.toolName === 'sessions_send') {
+            const direction = msg.direction === 'outgoing'
+                ? 'OUT'
+                : msg.direction === 'result'
+                    ? 'RESULT'
+                    : 'EVENT';
+            const target = msg.toSessionKey || msg.fromSessionKey || 'unknown';
+            const status = msg.status ? ` status=${msg.status}` : '';
+            const reason = msg.runId ? ` runId=${msg.runId}` : '';
+            return `${timestamp}${direction} ${target}:${status}${reason}\n${msg.content}`;
+        }
+
         const role = msg.role.toUpperCase();
-        const content = msg.content.substring(0, 500) + (msg.content.length > 500 ? '...' : '');
+        const content = msg.content;
         return `${timestamp}${role}: ${content}`;
     }).join('\n\n');
 }
@@ -112,6 +125,83 @@ function loadRecentMessages(agentId, storeMessages, days = 2) {
     return merged;
 }
 
+function parseOverlapCount(rawValue) {
+    const parsed = Number(rawValue);
+    if (!Number.isFinite(parsed)) return 1;
+    return Math.max(0, Math.floor(parsed));
+}
+
+function toTimestampMs(value) {
+    const ms = new Date(value || 0).getTime();
+    return Number.isFinite(ms) ? ms : null;
+}
+
+function sortArtifactsAsc(artifacts) {
+    return [...artifacts].sort((a, b) => {
+        const aEnd = toTimestampMs(a.endTimestamp) ?? 0;
+        const bEnd = toTimestampMs(b.endTimestamp) ?? 0;
+        if (aEnd !== bEnd) return aEnd - bEnd;
+        const aStart = toTimestampMs(a.startTimestamp) ?? 0;
+        const bStart = toTimestampMs(b.startTimestamp) ?? 0;
+        return aStart - bStart;
+    });
+}
+
+function sortMessagesAsc(messages) {
+    return [...messages].sort((a, b) => {
+        const t1 = toTimestampMs(a.timestamp) ?? 0;
+        const t2 = toTimestampMs(b.timestamp) ?? 0;
+        return t1 - t2;
+    });
+}
+
+function artifactKey(artifact) {
+    if (artifact.artifactId) return `artifact:${artifact.artifactId}`;
+    return `artifact:${artifact.level || ''}:${artifact.startTimestamp || ''}:${artifact.endTimestamp || ''}:${artifact.content || ''}`;
+}
+
+function messageKey(message) {
+    return `message:${message.timestamp || ''}:${message.role || ''}:${message.content || ''}`;
+}
+
+function uniqueItems(items, isMessageLevel) {
+    const out = [];
+    const seen = new Set();
+    for (const item of items) {
+        const key = isMessageLevel ? messageKey(item) : artifactKey(item);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(item);
+    }
+    return out;
+}
+
+function drilldownSourceItems({ agentId, sourceItems, sourceStoreMessages, sourceLevel, parentArtifact }) {
+    if (!parentArtifact) return [];
+
+    if (sourceLevel === 0) {
+        const parentStart = toTimestampMs(parentArtifact.startTimestamp);
+        const parentEnd = toTimestampMs(parentArtifact.endTimestamp);
+        if (parentStart === null || parentEnd === null) return [];
+
+        const rangedFromSource = sourceItems.filter((item) => {
+            const ts = toTimestampMs(item.timestamp);
+            return ts !== null && ts >= parentStart && ts <= parentEnd;
+        });
+
+        if (!agentId) return sortMessagesAsc(uniqueItems(rangedFromSource, true));
+
+        const archived = getArchivedMessages(agentId, parentArtifact.startTimestamp, parentArtifact.endTimestamp);
+        const rangedFromStore = sourceStoreMessages.filter((item) => {
+            const ts = toTimestampMs(item.timestamp);
+            return ts !== null && ts >= parentStart && ts <= parentEnd;
+        });
+        return sortMessagesAsc(uniqueItems([...archived, ...rangedFromStore, ...rangedFromSource], true));
+    }
+
+    return clampArtifactsToParentRange(sourceItems, parentArtifact);
+}
+
 /**
  * Generate context using reference algorithm
  * 
@@ -130,7 +220,7 @@ function generateContext(store, config, agentId) {
     const context = [];
     const artifactLevels = Object.keys(store.artifacts).map(Number);
     const maxLevel = artifactLevels.length > 0 ? Math.max(...artifactLevels) : 0;
-    const contextOverlap = config.contextOverlap || 1;
+    const contextOverlap = parseOverlapCount(config.contextOverlap);
     const includeTimestamps = config.includeTimestamps !== false;
     const agentConfig = agentId
         ? loadAgentConfig(agentId)
@@ -148,52 +238,60 @@ function generateContext(store, config, agentId) {
         const isMessageLevel = sourceLevel === 0;
 
         // Artifacts that summarize sourceLevel
-        const summarizingArtifacts = store.artifacts[level] || [];
+        const summarizingArtifacts = sortArtifactsAsc(store.artifacts[level] || []);
         
         // Source items (messages or artifacts)
         // For L0 messages: merge store.messages with archived messages from last 2 days
-        const sourceItems = isMessageLevel 
+        const sourceItemsRaw = isMessageLevel
             ? (agentId ? loadRecentMessages(agentId, store.messages, 2) : store.messages)
-            : (store.artifacts[sourceLevel] || []);
+            : (store.artifacts[sourceLevel] || []).filter((artifact) => artifact.contextEligible !== false);
+        const sourceItems = isMessageLevel ? sortMessagesAsc(sourceItemsRaw) : sortArtifactsAsc(sourceItemsRaw);
 
         if (sourceItems.length === 0) continue;
 
-        // Find boundary: what's already summarized (accounting for overlap)
-        // The boundary is the endTimestamp of the (N - contextOverlap)th artifact
-        let lastSummarizedTimestamp = null;
+        // Unified overlap rule:
+        // - Last N summarizing artifacts are replaced by their drilldown source items.
+        // - Plus include new source items after all summarizing coverage.
+        // - For artifact levels, hide last N source artifacts so they are always expanded below.
+        const hiddenSummaries = contextOverlap > 0 ? summarizingArtifacts.slice(-contextOverlap) : [];
+        const expandedItems = hiddenSummaries.flatMap((parentArtifact) =>
+            drilldownSourceItems({
+                agentId,
+                sourceItems,
+                sourceStoreMessages: store.messages,
+                sourceLevel,
+                parentArtifact
+            })
+        );
+
+        let tailItems = [];
         if (summarizingArtifacts.length > 0) {
-            const sorted = [...summarizingArtifacts].sort((a, b) => {
-                const t1 = new Date(a.endTimestamp).getTime();
-                const t2 = new Date(b.endTimestamp).getTime();
-                return t1 - t2;
-            });
-            // Take boundary from (length - 1 - overlap), but at least index 0
-            const boundaryIndex = Math.max(0, sorted.length - 1 - contextOverlap);
-            const boundaryArtifact = sorted[boundaryIndex];
-            lastSummarizedTimestamp = boundaryArtifact.endTimestamp;
+            const summaryEnds = summarizingArtifacts
+                .map((artifact) => toTimestampMs(artifact.endTimestamp))
+                .filter((ms) => ms !== null);
+            const maxSummaryEnd = summaryEnds.length > 0 ? Math.max(...summaryEnds) : null;
+            if (maxSummaryEnd !== null) {
+                tailItems = sourceItems.filter((item) => {
+                    const itemEnd = isMessageLevel
+                        ? toTimestampMs(item.timestamp)
+                        : toTimestampMs(item.endTimestamp);
+                    return itemEnd !== null && itemEnd > maxSummaryEnd;
+                });
+            }
         }
 
-        // Take "recent" items — with timestamp > lastSummarizedTimestamp
-        let recentItems = sourceItems.filter(item => {
-            if (!lastSummarizedTimestamp) return true; // All items are recent if no boundary
-            
-            const itemTimestamp = item.timestamp ?? item.endTimestamp;
-            const itemTime = new Date(itemTimestamp).getTime();
-            const boundaryTime = new Date(lastSummarizedTimestamp).getTime();
-            
-            return itemTime > boundaryTime;
-        });
-        
-        // If no higher-level summarization exists for artifacts, exclude last (overlap) items
-        // They will be "expanded" at the next lower level
-        if (!isMessageLevel && summarizingArtifacts.length === 0 && recentItems.length > contextOverlap) {
-            // Sort by endTimestamp and exclude last (overlap) items
-            recentItems = [...recentItems].sort((a, b) => {
-                const t1 = new Date(a.endTimestamp).getTime();
-                const t2 = new Date(b.endTimestamp).getTime();
-                return t1 - t2;
-            });
-            recentItems = recentItems.slice(0, -contextOverlap);
+        let recentItems;
+        if (summarizingArtifacts.length === 0) {
+            recentItems = sourceItems;
+        } else {
+            recentItems = uniqueItems([...expandedItems, ...tailItems], isMessageLevel);
+            recentItems = isMessageLevel ? sortMessagesAsc(recentItems) : sortArtifactsAsc(recentItems);
+        }
+
+        if (!isMessageLevel && contextOverlap > 0) {
+            const hiddenSource = sourceItems.slice(-contextOverlap);
+            const hiddenKeys = new Set(hiddenSource.map((artifact) => artifactKey(artifact)));
+            recentItems = recentItems.filter((artifact) => !hiddenKeys.has(artifactKey(artifact)));
         }
 
         if (recentItems.length === 0) continue;

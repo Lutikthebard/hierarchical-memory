@@ -1,5 +1,8 @@
-const { describe, it, beforeEach } = require('node:test');
+const { describe, it, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const {
   createEmptyStore,
   addMessage,
@@ -7,9 +10,14 @@ const {
   compareTimestamps,
   formatTimestamp,
   getUnsummarized,
+  selectSummarizationBatch,
   getLastSummarizedTimestamp,
   filterForCounting,
-  checkThreshold
+  checkThreshold,
+  saveStore,
+  loadStore,
+  getArtifactsRootDir,
+  getArtifactsIndexPath
 } = require('../scripts/store');
 
 describe('store.js', () => {
@@ -55,6 +63,31 @@ describe('store.js', () => {
       const ts = 1704067200000; // 2024-01-01T00:00:00.000Z
       const msg = addMessage(store, { role: 'user', content: 'test', timestamp: ts });
       assert.equal(msg.timestamp, new Date(ts).toISOString());
+    });
+
+    it('preserves inter-agent metadata fields', () => {
+      const msg = addMessage(store, {
+        role: 'assistant',
+        content: '[sessions_send -> agent:lira-guide:main] Ping',
+        timestamp: '2026-01-01T10:00:00.000Z',
+        messageClass: 'inter_agent',
+        direction: 'outgoing',
+        toSessionKey: 'agent:lira-guide:main',
+        toolName: 'sessions_send',
+        toolCallId: 'toolu_123',
+        runId: 'run_123',
+        status: 'completed',
+        sourceType: 'toolCall'
+      });
+
+      assert.equal(msg.messageClass, 'inter_agent');
+      assert.equal(msg.direction, 'outgoing');
+      assert.equal(msg.toSessionKey, 'agent:lira-guide:main');
+      assert.equal(msg.toolName, 'sessions_send');
+      assert.equal(msg.toolCallId, 'toolu_123');
+      assert.equal(msg.runId, 'run_123');
+      assert.equal(msg.status, 'completed');
+      assert.equal(msg.sourceType, 'toolCall');
     });
   });
 
@@ -229,6 +262,158 @@ describe('store.js', () => {
       const result = filterForCounting(messages, config);
       assert.equal(result.length, 1);
       assert.equal(result[0].content, '/status');
+    });
+
+    it('does not count inter-agent messages by default', () => {
+      const messages = [
+        { role: 'assistant', content: '[sessions_send -> agent:x:main] ping', messageClass: 'inter_agent' },
+        { role: 'assistant', content: 'normal reply', messageClass: 'dialogue' }
+      ];
+      const config = {
+        filters: {
+          countRoles: ['user', 'assistant'],
+          exclude: [],
+          excludePatterns: []
+        }
+      };
+      const result = filterForCounting(messages, config);
+      assert.equal(result.length, 1);
+      assert.equal(result[0].content, 'normal reply');
+    });
+  });
+
+  describe('long-term artifact export/load', () => {
+    const originalDataDir = process.env.HM_DATA_DIR;
+    let tmpDir;
+    const agentId = 'store-longterm-test';
+
+    beforeEach(() => {
+      tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hm-store-test-'));
+      process.env.HM_DATA_DIR = tmpDir;
+    });
+
+    afterEach(() => {
+      if (originalDataDir === undefined) {
+        delete process.env.HM_DATA_DIR;
+      } else {
+        process.env.HM_DATA_DIR = originalDataDir;
+      }
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    it('exports artifacts to long-term files and index on saveStore', () => {
+      const store = createEmptyStore();
+      addArtifact(store, 1, {
+        content: 'L1 export',
+        startTimestamp: '2026-02-10T09:00:00.000Z',
+        endTimestamp: '2026-02-10T09:05:00.000Z'
+      });
+      saveStore(agentId, store);
+
+      const artifactsRoot = getArtifactsRootDir(agentId);
+      const levelDir = path.join(artifactsRoot, 'L1');
+      assert.equal(fs.existsSync(levelDir), true);
+
+      const files = fs.readdirSync(levelDir).filter((name) => name.endsWith('.json'));
+      assert.equal(files.length, 1);
+
+      const indexPath = getArtifactsIndexPath(agentId);
+      assert.equal(fs.existsSync(indexPath), true);
+      const index = JSON.parse(fs.readFileSync(indexPath, 'utf8'));
+      assert.equal(Array.isArray(index.artifacts), true);
+      assert.equal(index.artifacts.length, 1);
+      assert.equal(index.artifacts[0].level, 1);
+      assert.equal(typeof index.artifacts[0].artifactId, 'string');
+    });
+
+    it('loadStore merges store + legacy file + long-term without duplicates', () => {
+      const store = createEmptyStore();
+      const fromStore = addArtifact(store, 1, {
+        content: 'Shared artifact',
+        startTimestamp: '2026-02-10T10:00:00.000Z',
+        endTimestamp: '2026-02-10T10:05:00.000Z'
+      });
+      saveStore(agentId, store);
+
+      const agentDir = path.join(tmpDir, agentId);
+      const legacyPath = path.join(agentDir, 'artifacts.json');
+      fs.writeFileSync(legacyPath, JSON.stringify({
+        1: [fromStore],
+        2: [{
+          content: 'Legacy L2',
+          level: 2,
+          startTimestamp: '2026-02-10T10:00:00.000Z',
+          endTimestamp: '2026-02-10T10:30:00.000Z',
+          createdAt: '2026-02-10T10:31:00.000Z'
+        }]
+      }, null, 2), 'utf8');
+
+      const loaded = loadStore(agentId);
+      assert.equal((loaded.artifacts[1] || []).length, 1);
+      assert.equal((loaded.artifacts[2] || []).length, 1);
+      assert.equal(typeof loaded.artifacts[1][0].artifactId, 'string');
+      assert.equal(typeof loaded.artifacts[2][0].artifactId, 'string');
+      assert.equal(loaded.artifacts[1][0].content, 'Shared artifact');
+      assert.equal(loaded.artifacts[2][0].content, 'Legacy L2');
+    });
+  });
+
+  describe('selectSummarizationBatch', () => {
+    it('selects earliest L0 batch by threshold using chronological order', () => {
+      const store = createEmptyStore();
+      addMessage(store, {
+        role: 'user',
+        content: 'm2',
+        timestamp: '2026-02-10T10:02:00.000Z',
+        messageClass: 'dialogue'
+      });
+      addMessage(store, {
+        role: 'assistant',
+        content: 'm1',
+        timestamp: '2026-02-10T10:01:00.000Z',
+        messageClass: 'dialogue'
+      });
+      addMessage(store, {
+        role: 'user',
+        content: 'm3',
+        timestamp: '2026-02-10T10:03:00.000Z',
+        messageClass: 'dialogue'
+      });
+
+      const selected = selectSummarizationBatch(store, 0, 2);
+      assert.equal(selected.needed, true);
+      assert.equal(selected.batch.length, 2);
+      assert.deepStrictEqual(
+        selected.batch.map((m) => m.timestamp),
+        ['2026-02-10T10:01:00.000Z', '2026-02-10T10:02:00.000Z']
+      );
+    });
+
+    it('selects only first threshold artifacts for higher levels', () => {
+      const store = createEmptyStore();
+      addArtifact(store, 1, {
+        content: 'a2',
+        startTimestamp: '2026-01-01T10:05:00.000Z',
+        endTimestamp: '2026-01-01T10:10:00.000Z'
+      });
+      addArtifact(store, 1, {
+        content: 'a1',
+        startTimestamp: '2026-01-01T10:00:00.000Z',
+        endTimestamp: '2026-01-01T10:05:00.000Z'
+      });
+      addArtifact(store, 1, {
+        content: 'a3',
+        startTimestamp: '2026-01-01T10:10:00.000Z',
+        endTimestamp: '2026-01-01T10:15:00.000Z'
+      });
+
+      const selected = selectSummarizationBatch(store, 1, 2);
+      assert.equal(selected.needed, true);
+      assert.equal(selected.batch.length, 2);
+      assert.deepStrictEqual(
+        selected.batch.map((a) => a.endTimestamp),
+        ['2026-01-01T10:05:00.000Z', '2026-01-01T10:10:00.000Z']
+      );
     });
   });
 });

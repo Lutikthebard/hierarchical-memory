@@ -35,6 +35,15 @@ class CompactController {
     this.sessionMessageCount = 0;
   }
 
+  setSessionMessageCount(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || numeric < 0) {
+      this.sessionMessageCount = 0;
+      return;
+    }
+    this.sessionMessageCount = Math.floor(numeric);
+  }
+
   async sendCompactCommand(agentId, postMessage, sendFn) {
     const now = Date.now();
     const minDelayMs = 5000;
@@ -63,17 +72,8 @@ class CompactController {
       return;
     }
 
-    if (this.awaitingCompaction && msg.role === 'assistant' && msg.shouldCount) {
-      const sent = await this.sendCompactCommand(agentId, postMessage, sendFn);
-      if (!sent) return;
-
-      this.compactRetryCount += 1;
-      const now = Date.now();
-      if (now - this.lastRetryLogTime > 30000) {
-        log(`   🔁 ${this.compactRetryCount} compact retries sent`);
-        this.lastRetryLogTime = now;
-      }
-    }
+    // While a compact is in flight, do not send additional compact commands.
+    // Completion is detected only by the compaction event in JSONL.
   }
 }
 

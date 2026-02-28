@@ -15,6 +15,7 @@ describe('message-classifier', () => {
   it('classifies heartbeat and memory internals', () => {
     assert.equal(classifyMessage('assistant', 'HEARTBEAT_OK'), 'heartbeat');
     assert.equal(classifyMessage('user', 'MEMORY TASK: do summary'), 'memory_internal');
+    assert.equal(classifyMessage('assistant', '<memory_artifact_L2>summary</memory_artifact_L2>'), 'memory_internal');
   });
 
   it('classifies commands and system noise', () => {
@@ -31,6 +32,8 @@ describe('message-classifier', () => {
   it('checks target class inclusion with defaults', () => {
     const filters = normalizeClassFilters({});
     assert.equal(isClassIncludedForTarget('dialogue', filters, 'store'), true);
+    assert.equal(isClassIncludedForTarget('inter_agent', filters, 'store'), true);
+    assert.equal(isClassIncludedForTarget('inter_agent', filters, 'count'), false);
     assert.equal(isClassIncludedForTarget('command', filters, 'store'), false);
   });
 });
