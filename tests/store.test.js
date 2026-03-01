@@ -314,16 +314,22 @@ describe('store.js', () => {
       const levelDir = path.join(artifactsRoot, 'L1');
       assert.equal(fs.existsSync(levelDir), true);
 
-      const files = fs.readdirSync(levelDir).filter((name) => name.endsWith('.json'));
+      const chunksDir = path.join(levelDir, 'chunks');
+      assert.equal(fs.existsSync(chunksDir), true);
+      const files = fs.readdirSync(chunksDir).filter((name) => name.endsWith('.jsonl'));
       assert.equal(files.length, 1);
 
       const indexPath = getArtifactsIndexPath(agentId);
       assert.equal(fs.existsSync(indexPath), true);
       const index = JSON.parse(fs.readFileSync(indexPath, 'utf8'));
+      assert.equal(index.version, 2);
+      assert.equal(index.chunkSize, 50);
       assert.equal(Array.isArray(index.artifacts), true);
       assert.equal(index.artifacts.length, 1);
       assert.equal(index.artifacts[0].level, 1);
       assert.equal(typeof index.artifacts[0].artifactId, 'string');
+      assert.equal(typeof index.artifacts[0].path, 'string');
+      assert.equal(index.artifacts[0].path.includes('/chunks/'), true);
     });
 
     it('loadStore merges store + legacy file + long-term without duplicates', () => {
