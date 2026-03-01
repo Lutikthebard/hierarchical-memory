@@ -4,8 +4,8 @@
 
 | Environment | Path |
 |---|---|
-| **DEV** | `~/Consilium/hierarchical-memory/` |
-| **PRODUCTION** | `~/clawd/council/hierarchical-memory/` |
+| **DEV** | `~/Consilium/hierarchical-memory/` (`/home/molt/Consilium/hierarchical-memory/`) |
+| **PRODUCTION** | `~/clawd/council/hierarchical-memory/` (`/home/molt/clawd/council/hierarchical-memory/`) |
 
 Rule: code changes are made in DEV first.
 Pipeline: `DEV -> tests -> rsync (code/config only)`.
@@ -55,7 +55,7 @@ npm run test:watch
 npm run test:multiagent:offline
 ```
 
-Current offline suite: `74 tests / 74 passed` (last local run: `2026-02-08`).
+Current offline suite: `130 tests / 130 passed` (last local run: `2026-03-01`).
 
 ## Useful Scripts
 
@@ -88,27 +88,47 @@ Global `config.json`:
 - `startFromTimestamp` (lower bound for L0 unsummarized selection)
 - `autoCompact.postCompactMessage`
 
-## API (main endpoints)
+## API (current endpoints)
 
-Per-agent:
+Agent registry/lifecycle:
+- `GET /api/agents/available`
 - `GET /api/agents`
 - `POST /api/agents`
 - `DELETE /api/agents/:id`
 - `POST /api/agents/:id/enable`
 - `POST /api/agents/:id/disable`
-- `GET /api/agents/:id/session/active`
-- `POST /api/agents/:id/session/sync`
+
+Per-agent runtime/state:
+- `GET /api/agents/:id/status`
 - `GET /api/agents/:id/stats`
 - `GET /api/agents/:id/store`
 - `GET /api/agents/:id/context`
-- `POST /api/agents/:id/context/rebuild`
-- `POST /api/agents/:id/memory/clear`
 - `GET /api/agents/:id/logs`
+- `GET /api/agents/:id/session/active`
+- `POST /api/agents/:id/session/sync`
+
+Per-agent operations:
+- `POST /api/agents/:id/context/rebuild`
+- `POST /api/agents/:id/context/inject`
+- `POST /api/agents/:id/compact`
+- `POST /api/agents/:id/compact-with-inject`
+- `POST /api/agents/:id/memory/clear`
+
+Rollback:
+- `POST /api/agents/:id/memory/rollback/preview`
+- `POST /api/agents/:id/memory/rollback`
+- `POST /api/agents/:id/memory/rollback/restore/:backupId`
+- `GET /api/agents/:id/memory/rollback/backups`
+
+Per-agent config/history/artifacts:
 - `GET /api/agents/:id/config`
 - `PUT /api/agents/:id/config`
 - `GET /api/agents/:id/messages-dates`
 - `GET /api/agents/:id/messages/:date`
 - `GET /api/agents/:id/artifact/:level/:index/messages`
+- `GET /api/agents/:id/artifacts`
+- `GET /api/agents/:id/artifacts/search`
+- `GET /api/agents/:id/artifacts/:artifactId/drilldown`
 
 Legacy (`main` compatibility):
 - `/api/status`, `/api/stats`, `/api/store`, `/api/context`, `/api/logs`, `/api/control`, `/api/artifact/:level/:index/messages`

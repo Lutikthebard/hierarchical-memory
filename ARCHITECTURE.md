@@ -1,7 +1,7 @@
 # Hierarchical Memory — Architecture (actual)
 
 **Status:** active DEV codebase
-**Last verification against code/tests:** 2026-02-21
+**Last verification against code/tests:** 2026-03-01
 
 ## Goal
 

@@ -2,8 +2,8 @@
 
 ## Topology
 
-- DEV repo: `~/Consilium/hierarchical-memory`
-- PROD repo: `~/clawd/council/hierarchical-memory`
+- DEV repo: `~/Consilium/hierarchical-memory` (`/home/molt/Consilium/hierarchical-memory`)
+- PROD repo: `~/clawd/council/hierarchical-memory` (`/home/molt/clawd/council/hierarchical-memory`)
 - Runtime data root: `data/` (or `HM_DATA_DIR` override)
 - Agents registry: `agents.json` (or `HM_AGENTS_CONFIG_PATH` override)
 
@@ -90,8 +90,8 @@ npm run test:multiagent:offline
 ```
 
 Latest local full suite run:
-- Date: `2026-02-08`
-- Result: `74 passed, 0 failed`
+- Date: `2026-03-01`
+- Result: `130 passed, 0 failed`
 
 ## Deploy DEV -> PROD
 
