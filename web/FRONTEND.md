@@ -17,7 +17,11 @@ web/
 ├── package.json
 └── public/
     ├── index.html
-    └── app.js
+    ├── app.js
+    ├── app-state.js
+    ├── app-helpers.js
+    ├── app-methods.js
+    └── app-methods-*.js
 ```
 
 ## Core UI Features
@@ -27,11 +31,13 @@ web/
   - start/stop watcher
   - sync active session from gateway
   - rebuild `CONTEXT.md`
+  - inject current context into active session
+  - compact + inject
   - clear agent memory
   - rollback memory to selected date/time (with preview/apply/restore)
 - Tabs:
   - `Context`
-  - `L1`, `L2`, `L3`
+  - dynamic level tabs (`L1+`, based on available artifact levels)
   - `Messages`
   - `Logs`
   - `Config`
@@ -64,7 +70,7 @@ Class-based filters supported:
 - `commandAllowlist`
 
 Message classes:
-- `dialogue`, `heartbeat`, `command`, `system_noise`, `memory_internal`
+- `dialogue`, `inter_agent`, `heartbeat`, `command`, `system_noise`, `memory_internal`
 
 ## API Used by Frontend
 
@@ -78,6 +84,8 @@ Message classes:
 - `GET /api/agents/:id/store`
 - `GET /api/agents/:id/context`
 - `POST /api/agents/:id/context/rebuild`
+- `POST /api/agents/:id/context/inject`
+- `POST /api/agents/:id/compact-with-inject`
 - `POST /api/agents/:id/memory/clear`
 - `POST /api/agents/:id/memory/rollback/preview`
 - `POST /api/agents/:id/memory/rollback`
@@ -91,6 +99,7 @@ Message classes:
 - `GET /api/agents/:id/messages-dates`
 - `GET /api/agents/:id/messages/:date`
 - `GET /api/agents/:id/artifact/:level/:index/messages`
+- `GET /api/agents/:id/artifacts/:artifactId/drilldown`
 - WebSocket: `WS /ws/logs`
 
 ## Rollback UX Flow

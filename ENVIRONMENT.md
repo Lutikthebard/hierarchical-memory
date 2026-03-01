@@ -64,7 +64,9 @@ Service files:
 - `OPENCLAW_AGENTS_DIR` (default `~/.openclaw/agents`)
 - `HM_LLM_MODE` (`openclaw`|`mock`, default `openclaw`)
 - `GATEWAY_TOKEN` (optional)
+- `GATEWAY_PASSWORD` (optional; fallback to `~/.openclaw/openclaw.json` if present)
 - `TRIGGER_TIMEOUT_SEC` (default `300`)
+- `TRIGGER_ARTIFACT_WAIT_MS` (default `60000`; watcher stream artifact wait window)
 
 ## Runtime Behavior Summary
 

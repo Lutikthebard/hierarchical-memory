@@ -59,6 +59,7 @@ Message fields:
 - `content`
 - `timestamp` (timestamp-based identity)
 - optional `messageClass`
+- optional inter-agent metadata (`direction`, `fromSessionKey`, `toSessionKey`, `toolName`, `toolCallId`, `runId`, `status`, `sourceType`)
 
 Artifact fields:
 - `content`
@@ -84,13 +85,15 @@ Artifact fields:
 
 Message classes:
 - `dialogue`
+- `inter_agent`
 - `heartbeat`
 - `command`
 - `system_noise`
 - `memory_internal`
 
 Default inclusion:
-- store/count/context -> only `dialogue`
+- store/context -> `dialogue`, `inter_agent`
+- count -> only `dialogue`
 
 Additional filters:
 - `countRoles`, `storeRoles`
@@ -136,10 +139,10 @@ Per-agent endpoints include:
 - lifecycle (`enable/disable`)
 - session (`session/active`, `session/sync`)
 - data (`stats`, `store`, `context`, logs)
-- maintenance (`context/rebuild`, `memory/clear`)
+- maintenance (`context/rebuild`, `context/inject`, `compact`, `compact-with-inject`, `memory/clear`)
 - rollback (`memory/rollback/preview`, `memory/rollback`, `memory/rollback/restore/:backupId`, `memory/rollback/backups`)
 - config (`GET/PUT config`)
-- history/drilldown (`messages-dates`, `messages/:date`, `artifact/:level/:index/messages`)
+- history/drilldown (`messages-dates`, `messages/:date`, `artifact/:level/:index/messages`, `artifacts/search`, `artifacts/:artifactId/drilldown`)
 
 Legacy main-agent compatibility API is still available.
 

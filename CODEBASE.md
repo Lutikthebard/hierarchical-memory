@@ -34,18 +34,21 @@ Important details:
 
 Message classes:
 - `dialogue`
+- `inter_agent`
 - `heartbeat`
 - `command`
 - `system_noise`
 - `memory_internal`
 
 Defaults:
-- store/count/context include only `dialogue`.
+- store/context include `dialogue` + `inter_agent`.
+- count includes only `dialogue`.
 
 ### `scripts/message-parser.js`
 
 - parses JSONL lines (`type=message`)
 - normalizes content/timestamps
+- extracts `sessions_send` toolCall/toolResult into `inter_agent` events
 - applies store filters
 - sets `shouldCount` for compact/threshold logic
 
@@ -122,6 +125,7 @@ Notes:
 - `content`
 - `timestamp`
 - optional `messageClass`
+- optional inter-agent metadata (`direction`, `fromSessionKey`, `toSessionKey`, `toolName`, `toolCallId`, `runId`, `status`, `sourceType`)
 
 ### Artifact (`store.artifacts[level][]`)
 
@@ -140,6 +144,7 @@ Per agent (`data/<agentId>/`):
 - `config.json`
 - `CONTEXT.md`
 - `messages/*.jsonl`
+- `artifacts/*` + `artifacts-index.json` (long-term artifact storage)
 - `watch.log`
 - `watch.pid`
 - `last-session.json`

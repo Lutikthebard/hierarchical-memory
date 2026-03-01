@@ -4,8 +4,8 @@
 
 | Environment | Path |
 |---|---|
-| **DEV** | `~/Consilium/hierarchical-memory/` (`/home/molt/Consilium/hierarchical-memory/`) |
-| **PRODUCTION** | `~/clawd/council/hierarchical-memory/` (`/home/molt/clawd/council/hierarchical-memory/`) |
+| **DEV** | `~/Consilium/hierarchical-memory/` |
+| **PRODUCTION** | `~/clawd/council/hierarchical-memory/` |
 
 Rule: code changes are made in DEV first.
 Pipeline: `DEV -> tests -> rsync (code/config only)`.
@@ -78,7 +78,9 @@ npm run loadtest:offline
 - `OPENCLAW_AGENTS_DIR` (default `~/.openclaw/agents`) — sessions source for resolver/API.
 - `HM_LLM_MODE` (default `openclaw`, optional `mock`) — summarization adapter.
 - `GATEWAY_TOKEN` (optional) — gateway auth token.
+- `GATEWAY_PASSWORD` (optional) — gateway auth password (used when token is absent).
 - `TRIGGER_TIMEOUT_SEC` (default `300`) — trigger timeout for openclaw mode.
+- `TRIGGER_ARTIFACT_WAIT_MS` (default `60000`) — artifact wait window in watcher stream mode.
 
 Global `config.json`:
 - `thresholds.L1` / `thresholds.default`
