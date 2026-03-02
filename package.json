@@ -10,6 +10,8 @@
     "loadtest:offline": "node scripts/load-test-offline.js",
     "e2e:real": "bash scripts/dev/run-real-e2e.sh",
     "e2e:real:stop": "bash scripts/dev/stop-real-e2e.sh",
+    "e2e:real:learn-export": "bash scripts/dev/run-real-e2e-learn-export.sh",
+    "e2e:real:learn-export:stop": "bash scripts/dev/stop-real-e2e-learn-export.sh",
     "test:watch": "node --test --watch tests/*.test.js",
     "dev": "node web/server.js"
   },
