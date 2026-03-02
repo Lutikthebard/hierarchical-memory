@@ -1,7 +1,7 @@
 # Hierarchical Memory — Architecture (actual)
 
 **Status:** active DEV codebase
-**Last verification against code/tests:** 2026-03-01
+**Last verification against code/tests:** 2026-03-02
 
 ## Goal
 
@@ -15,6 +15,8 @@ Preserve long-term agent memory by compressing conversation into hierarchical ar
 - `scripts/gateway-client.js` + `scripts/gateway/*` — gateway transport + history/retry/artifact extraction.
 - `scripts/llm-adapter.js` — transport mode (`openclaw` or `mock`).
 - `scripts/context.js` — CONTEXT.md generation.
+- `scripts/full-summarization-service.js` — forced multi-level summarization runs.
+- `scripts/learn-context-service.js` — text-block learning ingestion workflow.
 - `scripts/rollback-service.js` — rollback planner/apply/restore with backup.
 - `web/server.js` + `web/routes/*` + `web/services/*` — dashboard/api + watcher process manager.
 - `web/public/app*.js` — frontend dashboard split by state/method domains.
@@ -139,7 +141,7 @@ Per-agent endpoints include:
 - lifecycle (`enable/disable`)
 - session (`session/active`, `session/sync`)
 - data (`stats`, `store`, `context`, logs)
-- maintenance (`context/rebuild`, `context/inject`, `compact`, `compact-with-inject`, `memory/clear`)
+- maintenance (`context/rebuild`, `context/inject`, `compact`, `compact-with-inject`, `memory/summarize-full`, `memory/learn-context`, `memory/clear`)
 - rollback (`memory/rollback/preview`, `memory/rollback`, `memory/rollback/restore/:backupId`, `memory/rollback/backups`)
 - config (`GET/PUT config`)
 - history/drilldown (`messages-dates`, `messages/:date`, `artifact/:level/:index/messages`, `artifacts/search`, `artifacts/:artifactId/drilldown`)

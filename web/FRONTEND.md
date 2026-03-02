@@ -38,6 +38,7 @@ web/
 - Tabs:
   - `Context`
   - dynamic level tabs (`L1+`, based on available artifact levels)
+  - `Learn Context`
   - `Messages`
   - `Logs`
   - `Config`
@@ -59,9 +60,11 @@ web/
 Editable areas:
 - thresholds
 - prompts
+- prompts by source level (`aggregateBySourceLevel`)
 - filters
 - autoInjectContext
 - autoCompact
+- learnContext defaults
 
 Class-based filters supported:
 - `storeMessageClasses`
@@ -87,6 +90,7 @@ Message classes:
 - `POST /api/agents/:id/context/inject`
 - `POST /api/agents/:id/compact-with-inject`
 - `POST /api/agents/:id/memory/summarize-full`
+- `POST /api/agents/:id/memory/learn-context`
 - `POST /api/agents/:id/memory/clear`
 - `POST /api/agents/:id/memory/rollback/preview`
 - `POST /api/agents/:id/memory/rollback`
@@ -102,6 +106,33 @@ Message classes:
 - `GET /api/agents/:id/artifact/:level/:index/messages`
 - `GET /api/agents/:id/artifacts/:artifactId/drilldown`
 - WebSocket: `WS /ws/logs`
+
+## Full Summarize UX Flow
+
+1. Select agent.
+2. Click `Full Summarize`.
+3. UI calls `POST /api/agents/:id/memory/summarize-full`.
+4. Backend pauses watcher, runs full summarization passes, rebuilds context, restarts watcher.
+5. UI reloads stats/store/context/session and shows pass count.
+
+## Learn Context UX Flow
+
+1. Open `Learn Context` tab.
+2. Choose text file and set `wordsPerBlock`.
+3. Optionally set block range (`fromBlock`, `toBlock`), learning intent, L1 extra prompt.
+4. Optionally set aggregate prompt overrides:
+   - global (`aggregatePrompt`)
+   - per source level (`aggregatePromptsByLevel`, one per line `L1: ...`).
+5. Optionally set threshold overrides and post-ingest full summarize options.
+6. Click `Run Learn Context` to call `POST /api/agents/:id/memory/learn-context`.
+7. UI refreshes agent data and displays ingestion result (blocks, L1 artifacts, full summarize passes).
+
+## Aggregation Prompt Priority
+
+For aggregate tasks (`L1->L2+`) the effective prompt is resolved in this order:
+1. runtime per-level override (`aggregatePromptsByLevel` from request),
+2. config per-level prompt (`prompts.aggregateBySourceLevel`),
+3. generic aggregate prompt (`prompts.aggregate`).
 
 ## Rollback UX Flow
 

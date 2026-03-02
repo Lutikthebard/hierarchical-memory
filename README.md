@@ -55,7 +55,7 @@ npm run test:watch
 npm run test:multiagent:offline
 ```
 
-Current offline suite: `130 tests / 130 passed` (last local run: `2026-03-01`).
+Current offline suite: `135 tests / 135 passed` (last local run: `2026-03-02`).
 
 ## Useful Scripts
 
@@ -114,6 +114,8 @@ Per-agent operations:
 - `POST /api/agents/:id/context/inject`
 - `POST /api/agents/:id/compact`
 - `POST /api/agents/:id/compact-with-inject`
+- `POST /api/agents/:id/memory/summarize-full`
+- `POST /api/agents/:id/memory/learn-context`
 - `POST /api/agents/:id/memory/clear`
 
 Rollback:
@@ -134,6 +136,65 @@ Per-agent config/history/artifacts:
 
 Legacy (`main` compatibility):
 - `/api/status`, `/api/stats`, `/api/store`, `/api/context`, `/api/logs`, `/api/control`, `/api/artifact/:level/:index/messages`
+
+## Full Summarize
+
+Purpose: force compression of accumulated memory from L0 upward in one controlled run (watcher is paused during operation).
+
+Endpoint:
+- `POST /api/agents/:id/memory/summarize-full`
+
+Optional request fields:
+- `maxTargetLevel` (number) — upper target level limit.
+- `aggregateBatch` (number) — batch size override for aggregate passes (L1+).
+
+Behavior:
+- runs iterative summarization passes (`L0->L1`, `L1->L2`, ...),
+- archives summarized L0 messages,
+- rebuilds `CONTEXT.md`,
+- resumes watcher and returns pass telemetry.
+
+## Learn Context
+
+Purpose: ingest an external text as learned memory for selected agent while reusing standard summarization pipeline.
+
+Endpoint:
+- `POST /api/agents/:id/memory/learn-context`
+
+Core request fields:
+- `text` (string) — source text to learn from.
+- `wordsPerBlock` (number) — word chunk size.
+- `fromBlock` / `toBlock` (number, optional) — process only selected block range.
+- `learningIntent` (string, optional) — intent added into L1 learning prompt.
+- `l1ArtifactPrompt` (string, optional) — additional L1 prompt instructions.
+- `runFullSummarize` (boolean, default `true`) — run post-ingest full summarization.
+
+Prompt overrides:
+- `aggregatePrompt` (string, optional) — global aggregate prompt override.
+- `aggregatePromptsByLevel` (object, optional) — per-source-level aggregate prompts (`L1`, `L2`, ...).
+
+Threshold overrides:
+- `thresholds` (object, optional) — temporary thresholds for this run (`L1`, `default`, `L2+`).
+- `maxTargetLevel` / `aggregateBatch` (number, optional) — full summarize options after learning.
+
+Behavior:
+- splits text into word blocks,
+- creates L1 artifacts block-by-block,
+- optionally runs full summarization from `sourceLevel=1` upward,
+- rebuilds `CONTEXT.md`,
+- resumes watcher and returns ingestion/summarization report.
+
+## Agent Prompt Configuration
+
+`PUT /api/agents/:id/config` supports:
+- `prompts.l1` — base L1 prompt.
+- `prompts.aggregate` — fallback aggregate prompt for all levels > L1.
+- `prompts.aggregateBySourceLevel` — optional per-source-level aggregate prompts (`L1`, `L2`, ...).
+
+Prompt priority for aggregation:
+1. runtime `aggregatePromptsByLevel` (request-level override),
+2. config `prompts.aggregateBySourceLevel`,
+3. runtime/config `prompts.aggregate` fallback.
 
 ## Deploy DEV -> Production
 
