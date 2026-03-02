@@ -4,6 +4,7 @@
     return {
       ...from(globalObj.HmAppMemorySessionMethods?.createMethods),
       ...from(globalObj.HmAppMemoryLearnMethods?.createMethods),
+      ...from(globalObj.HmAppMemoryExportMethods?.createMethods),
       ...from(globalObj.HmAppMemoryRollbackMethods?.createMethods)
     };
   }

@@ -117,6 +117,7 @@
       <div x-show="compactInjectMessage" class="mt-1 text-xs text-gray-600" x-text="compactInjectMessage"></div>
       <div x-show="fullSummarizeMessage" class="mt-1 text-xs text-gray-600" x-text="fullSummarizeMessage"></div>
       <div x-show="learnContextMessage" class="mt-1 text-xs text-gray-600" x-text="learnContextMessage"></div>
+      <div x-show="exportContextMessage" class="mt-1 text-xs text-gray-600" x-text="exportContextMessage"></div>
       <div x-show="memoryClearMessage" class="mt-1 text-xs text-gray-600" x-text="memoryClearMessage"></div>
       <div x-show="rollbackMessage" class="mt-1 text-xs text-gray-600" x-text="rollbackMessage"></div>
     </div>
@@ -190,6 +191,7 @@
           </button>
         </template>
         <button @click="activeTab = 'learn'" :class="activeTab === 'learn' ? 'border-b-2 border-emerald-500 font-semibold' : ''" class="px-4 py-2 text-sm">Learn Context</button>
+        <button @click="activeTab = 'export-context'" :class="activeTab === 'export-context' ? 'border-b-2 border-cyan-500 font-semibold' : ''" class="px-4 py-2 text-sm">Export Context</button>
         <button @click="activeTab = 'messages'" :class="activeTab === 'messages' ? 'border-b-2 border-gray-500 font-semibold' : ''" class="px-4 py-2 text-sm">Messages</button>
         <button @click="activeTab = 'logs'" :class="activeTab === 'logs' ? 'border-b-2 border-gray-500 font-semibold' : ''" class="px-4 py-2 text-sm">Logs</button>
       </div>
@@ -342,6 +344,66 @@
             <div><strong>Blocks:</strong> <span x-text="learnContextResult?.blocks?.selected || 0"></span> / <span x-text="learnContextResult?.blocks?.total || 0"></span></div>
             <div><strong>L1 artifacts:</strong> <span x-text="learnContextResult?.l1?.created || 0"></span></div>
             <div><strong>Full summarize passes:</strong> <span x-text="learnContextResult?.fullSummarize?.run?.passes?.length || 0"></span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Export Context Tab -->
+      <div x-show="activeTab === 'export-context'">
+        <div class="bg-white border rounded p-4 space-y-4">
+          <h3 class="font-bold text-sm">📤 Export Learned Context</h3>
+
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div>
+              <label class="text-xs text-gray-600 block mb-1">From level</label>
+              <input type="number" min="1" x-model.number="exportContextForm.fromLevel" class="w-full border rounded px-2 py-1 text-sm">
+            </div>
+            <div>
+              <label class="text-xs text-gray-600 block mb-1">To level (optional)</label>
+              <input type="number" min="1" x-model.number="exportContextForm.toLevel" class="w-full border rounded px-2 py-1 text-sm">
+            </div>
+            <div>
+              <label class="text-xs text-gray-600 block mb-1">Date from (optional)</label>
+              <input type="datetime-local" x-model="exportContextForm.dateFrom" class="w-full border rounded px-2 py-1 text-sm">
+            </div>
+            <div>
+              <label class="text-xs text-gray-600 block mb-1">Date to (optional)</label>
+              <input type="datetime-local" x-model="exportContextForm.dateTo" class="w-full border rounded px-2 py-1 text-sm">
+            </div>
+            <div>
+              <label class="text-xs text-gray-600 block mb-1">Output file name (optional)</label>
+              <input type="text" x-model="exportContextForm.outputFileName" class="w-full border rounded px-2 py-1 text-sm" placeholder="my-export.md">
+            </div>
+            <div>
+              <label class="text-xs text-gray-600 block mb-1">Max nodes (safety limit)</label>
+              <input type="number" min="1" x-model.number="exportContextForm.maxNodes" class="w-full border rounded px-2 py-1 text-sm">
+            </div>
+          </div>
+
+          <label class="flex items-center gap-2 text-sm">
+            <input type="checkbox" x-model="exportContextForm.includeArchivedMessages" class="rounded">
+            <span>Include archived L0 messages</span>
+          </label>
+
+          <div class="flex justify-end">
+            <button
+              @click="exportLearnedContext()"
+              :disabled="exportContextInProgress || !selectedAgent"
+              class="px-4 py-2 text-sm bg-cyan-600 text-white rounded disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <span x-text="exportContextInProgress ? 'Exporting...' : 'Export Learned Context'"></span>
+            </button>
+          </div>
+
+          <div x-show="exportContextResult" class="border rounded p-3 text-xs space-y-1" style="display: none;">
+            <div><strong>File:</strong> <code x-text="exportContextResult?.file?.path || ''"></code></div>
+            <div><strong>Root artifacts:</strong> <span x-text="exportContextResult?.stats?.rootArtifacts || 0"></span></div>
+            <div><strong>Total nodes:</strong> <span x-text="exportContextResult?.stats?.totalNodes || 0"></span></div>
+          </div>
+
+          <div x-show="exportContextTreeText" class="border rounded p-3 text-xs" style="display: none;">
+            <div class="font-semibold mb-2">Drill-down</div>
+            <pre class="whitespace-pre-wrap" x-text="exportContextTreeText"></pre>
           </div>
         </div>
       </div>
@@ -798,6 +860,7 @@
   <script src="app-methods-data.js?v=20260221-3"></script>
   <script src="app-methods-memory-session.js?v=20260221-1"></script>
   <script src="app-methods-memory-learn.js?v=20260302-1"></script>
+  <script src="app-methods-memory-export.js?v=20260302-1"></script>
   <script src="app-methods-memory-rollback.js?v=20260221-1"></script>
   <script src="app-methods-memory.js?v=20260221-4"></script>
   <script src="app-methods-agents.js?v=20260221-3"></script>

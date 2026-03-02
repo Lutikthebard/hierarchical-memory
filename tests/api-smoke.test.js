@@ -269,6 +269,30 @@ describe('dashboard/api localhost smoke', () => {
       const contextPayload = await contextRes.json();
       assert.match(contextPayload.content, /Memory Context/);
 
+      const exportRes = await fetch(`http://127.0.0.1:${PORT}/api/agents/${AGENT_ID}/memory/export-context`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fromLevel: 1,
+          toLevel: 4,
+          dateFrom: '2026-02-06T09:00:00.000Z',
+          dateTo: '2026-02-06T09:10:00.000Z',
+          includeArchivedMessages: true
+        })
+      });
+      const exportPayload = await exportRes.json();
+      assert.equal(exportRes.ok, true, JSON.stringify(exportPayload));
+      assert.equal(exportPayload.success, true);
+      assert.equal(exportPayload.run.filters.fromLevel, 1);
+      assert.equal(exportPayload.run.filters.toLevel, 4);
+      assert.equal(exportPayload.run.stats.rootArtifacts, 1);
+      assert.equal(exportPayload.run.tree.roots.length, 1);
+      assert.equal(typeof exportPayload.run.file.path, 'string');
+      assert.equal(fs.existsSync(exportPayload.run.file.path), true);
+      const exportedMd = fs.readFileSync(exportPayload.run.file.path, 'utf8');
+      assert.match(exportedMd, /Learned Context Export/);
+      assert.match(exportedMd, /L4 artifact/);
+
       const fullSummarizeRes = await fetch(`http://127.0.0.1:${PORT}/api/agents/${FULL_AGENT_ID}/memory/summarize-full`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -344,6 +368,13 @@ describe('dashboard/api localhost smoke', () => {
         body: JSON.stringify({ text: 'x y z', wordsPerBlock: 2 })
       });
       assert.equal(learnContext404Res.status, 404);
+
+      const exportContext404Res = await fetch(`http://127.0.0.1:${PORT}/api/agents/missing-agent/memory/export-context`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fromLevel: 1, toLevel: 2 })
+      });
+      assert.equal(exportContext404Res.status, 404);
 
       const logsRes = await fetch(`http://127.0.0.1:${PORT}/api/agents/${AGENT_ID}/logs?lines=10`);
       const logsPayload = await logsRes.json();

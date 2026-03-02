@@ -19,6 +19,7 @@ const {
 const rollbackService = require('../scripts/rollback-service');
 const { createFullSummarizationService } = require('../scripts/full-summarization-service');
 const { createLearnContextService } = require('../scripts/learn-context-service');
+const { createExportLearnedContextService } = require('../scripts/export-learned-context-service');
 const {
   loadLastSessionBinding,
   saveLastSessionBinding
@@ -42,6 +43,7 @@ const fullSummarizationService = createFullSummarizationService();
 const learnContextService = createLearnContextService({
   runFullSummarization: fullSummarizationService.runFullSummarization
 });
+const exportLearnedContextService = createExportLearnedContextService();
 
 // Paths
 const BASE_DIR = path.join(__dirname, '..');
@@ -258,7 +260,8 @@ const agentHandlers = registerAgentRoutes(app, {
     startWatcher
   }),
   runFullSummarization: fullSummarizationService.runFullSummarization,
-  runLearnContext: learnContextService.runLearnContext
+  runLearnContext: learnContextService.runLearnContext,
+  runExportLearnedContext: exportLearnedContextService.runExportLearnedContext
 });
 
 registerArtifactRoutes(app, { store, handleArtifactDrilldown: agentHandlers.handleArtifactDrilldown });

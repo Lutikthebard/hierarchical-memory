@@ -43,7 +43,8 @@ function registerAgentRoutes(app, deps) {
     fsSync,
     watcherMaintenance,
     runFullSummarization,
-    runLearnContext
+    runLearnContext,
+    runExportLearnedContext
   } = deps;
 
   async function getSessionMessageCount(agentId) {
@@ -215,6 +216,7 @@ function registerAgentRoutes(app, deps) {
     watcherMaintenance,
     runFullSummarization,
     runLearnContext,
+    runExportLearnedContext,
     resolveActionSession,
     handleAgentStats,
     handleAgentStore,

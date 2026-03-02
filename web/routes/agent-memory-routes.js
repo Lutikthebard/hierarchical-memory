@@ -1,5 +1,6 @@
 const { registerAgentMemoryFullSummarizationRoute } = require('./agent-memory-full-summarization-route');
 const { registerAgentMemoryLearnContextRoute } = require('./agent-memory-learn-context-route');
+const { registerAgentMemoryExportContextRoute } = require('./agent-memory-export-context-route');
 
 function registerAgentMemoryRoutes(app, ctx) {
   const {
@@ -21,7 +22,8 @@ function registerAgentMemoryRoutes(app, ctx) {
     waitForCompaction,
     resolveActionSession,
     runFullSummarization,
-    runLearnContext
+    runLearnContext,
+    runExportLearnedContext
   } = ctx;
 
   function requireAgent(id, res) {
@@ -57,6 +59,12 @@ function registerAgentMemoryRoutes(app, ctx) {
     rebuildContextFile,
     resolveActionSession,
     runLearnContext,
+    requireAgent
+  });
+
+  registerAgentMemoryExportContextRoute(app, {
+    ...ctx,
+    runExportLearnedContext,
     requireAgent
   });
 

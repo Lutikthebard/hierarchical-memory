@@ -38,6 +38,19 @@
       learnContextInProgress: false,
       learnContextMessage: '',
       learnContextResult: null,
+      exportContextInProgress: false,
+      exportContextMessage: '',
+      exportContextResult: null,
+      exportContextTreeText: '',
+      exportContextForm: {
+        fromLevel: 1,
+        toLevel: '',
+        dateFrom: '',
+        dateTo: '',
+        includeArchivedMessages: true,
+        outputFileName: '',
+        maxNodes: 5000
+      },
       learnContextForm: {
         fileName: '',
         fileText: '',
