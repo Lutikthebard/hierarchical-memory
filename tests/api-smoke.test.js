@@ -351,7 +351,14 @@ describe('dashboard/api localhost smoke', () => {
 
       const validConfig = {
         thresholds: { L1: 42, default: 5 },
-        prompts: { l1: 'Summarize', aggregate: 'Aggregate {level}' },
+        prompts: {
+          l1: 'Summarize',
+          aggregate: 'Aggregate {level}',
+          aggregateBySourceLevel: {
+            L1: 'Aggregate L1 custom',
+            L2: 'Aggregate L2 custom'
+          }
+        },
         filters: {
           exclude: [],
           excludePatterns: [],
@@ -402,6 +409,7 @@ describe('dashboard/api localhost smoke', () => {
       assert.deepEqual(getConfigPayload.filters.countMessageClasses, ['dialogue']);
       assert.equal(getConfigPayload.autoInjectContext.preText, 'before');
       assert.deepEqual(getConfigPayload.autoInjectContext.preMdFiles, ['README.md']);
+      assert.equal(getConfigPayload.prompts.aggregateBySourceLevel.L1, 'Aggregate L1 custom');
       assert.equal(getConfigPayload.learnContext.wordsPerBlock, 120);
       assert.equal(getConfigPayload.learnContext.learningIntent, 'Default learning intent');
       assert.equal(getConfigPayload.learnContext.aggregatePromptsByLevel.L1, 'L1->L2 learn prompt');
@@ -485,6 +493,21 @@ describe('dashboard/api localhost smoke', () => {
       const invalidInjectConfigPayload = await invalidInjectConfigRes.json();
       assert.equal(invalidInjectConfigRes.status, 400);
       assert.match(invalidInjectConfigPayload.error, /autoInjectContext\.preMdFiles/i);
+
+      const invalidAggregateLevelsRes = await fetch(`http://127.0.0.1:${PORT}/api/agents/${AGENT_ID}/config`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...validConfig,
+          prompts: {
+            ...validConfig.prompts,
+            aggregateBySourceLevel: ['L1: broken']
+          }
+        })
+      });
+      const invalidAggregateLevelsPayload = await invalidAggregateLevelsRes.json();
+      assert.equal(invalidAggregateLevelsRes.status, 400);
+      assert.match(invalidAggregateLevelsPayload.error, /prompts\.aggregateBySourceLevel/i);
 
       const clearRes = await fetch(`http://127.0.0.1:${PORT}/api/agents/${AGENT_ID}/memory/clear`, {
         method: 'POST'

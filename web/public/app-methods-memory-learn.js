@@ -5,33 +5,7 @@
     return Math.floor(n);
   }
 
-  function parseMapLines(text) {
-    const out = {};
-    const lines = String(text || '')
-      .split('\n')
-      .map((line) => line.trim())
-      .filter(Boolean);
-
-    for (const line of lines) {
-      const idx = line.indexOf(':');
-      if (idx <= 0) continue;
-      const key = line.slice(0, idx).trim();
-      const value = line.slice(idx + 1).trim();
-      if (!key || !value) continue;
-      out[key] = value;
-    }
-    return out;
-  }
-
-  function formatMapLines(map) {
-    if (!map || typeof map !== 'object') return '';
-    return Object.entries(map)
-      .filter(([, value]) => String(value || '').trim())
-      .map(([key, value]) => `${key}: ${value}`)
-      .join('\n');
-  }
-
-  function createMethods() {
+  function createMethods(H) {
     return {
       fillLearnContextFormFromConfig() {
         const defaults = this.agentConfig?.learnContext || {};
@@ -43,10 +17,10 @@
           learningIntent: String(defaults.learningIntent || ''),
           l1ArtifactPrompt: String(defaults.l1ArtifactPrompt || ''),
           aggregatePrompt: String(defaults.aggregatePrompt || ''),
-          aggregatePromptsByLevelText: formatMapLines(defaults.aggregatePromptsByLevel || {}),
+          aggregatePromptsByLevelText: H.formatKeyValueMap(defaults.aggregatePromptsByLevel || {}),
           thresholdL1: toPositiveInt(defaults.thresholds?.L1) || '',
           thresholdDefault: toPositiveInt(defaults.thresholds?.default) || '',
-          thresholdByLevelText: formatMapLines(
+          thresholdByLevelText: H.formatKeyValueMap(
             Object.fromEntries(
               Object.entries(defaults.thresholds || {}).filter(([key]) => /^L\d+$/i.test(String(key || '')))
             )
@@ -85,7 +59,7 @@
         if (l1) thresholds.L1 = l1;
         if (def) thresholds.default = def;
 
-        const thresholdLines = parseMapLines(this.learnContextForm.thresholdByLevelText);
+        const thresholdLines = H.parseKeyValueMap(this.learnContextForm.thresholdByLevelText);
         for (const [key, value] of Object.entries(thresholdLines)) {
           const parsed = toPositiveInt(value);
           if (!parsed) continue;
@@ -102,7 +76,7 @@
           learningIntent: String(this.learnContextForm.learningIntent || ''),
           l1ArtifactPrompt: String(this.learnContextForm.l1ArtifactPrompt || ''),
           aggregatePrompt: String(this.learnContextForm.aggregatePrompt || ''),
-          aggregatePromptsByLevel: parseMapLines(this.learnContextForm.aggregatePromptsByLevelText),
+          aggregatePromptsByLevel: H.parseKeyValueMap(this.learnContextForm.aggregatePromptsByLevelText),
           thresholds,
           runFullSummarize: this.learnContextForm.runFullSummarize !== false,
           maxTargetLevel: toPositiveInt(this.learnContextForm.maxTargetLevel) || undefined,

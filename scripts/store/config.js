@@ -8,7 +8,8 @@ const DEFAULT_AGENT_CONFIG = {
   thresholds: { L1: 60, default: 5 },
   prompts: {
     l1: 'Summarize the following conversation into a concise memory artifact. Focus on: decisions made, problems solved, key insights, action items. Use markdown headers for structure. Be concise but complete.',
-    aggregate: 'Aggregate these L{level} memory artifacts into a higher-level summary. Identify patterns, major themes, and important conclusions. Preserve key details while reducing redundancy.'
+    aggregate: 'Aggregate these L{level} memory artifacts into a higher-level summary. Identify patterns, major themes, and important conclusions. Preserve key details while reducing redundancy.',
+    aggregateBySourceLevel: {}
   },
   filters: {
     exclude: ['HEARTBEAT_OK', 'NO_REPLY'],

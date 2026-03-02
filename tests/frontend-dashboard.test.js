@@ -34,6 +34,8 @@ test('frontend dashboard module composition', () => {
     normalizeClassFilterArrays: (f) => f,
     parseTextareaList: () => [],
     formatTextareaList: () => '',
+    parseKeyValueMap: () => ({}),
+    formatKeyValueMap: () => '',
     extractTitle: (s) => s,
     formatTime: (s) => String(s)
   };
@@ -84,6 +86,8 @@ test('rollbackCutoffIso getter stays reactive', () => {
     normalizeClassFilterArrays: (f) => f,
     parseTextareaList: () => [],
     formatTextareaList: () => '',
+    parseKeyValueMap: () => ({}),
+    formatKeyValueMap: () => '',
     extractTitle: (s) => s,
     formatTime: (s) => String(s)
   };

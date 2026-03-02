@@ -218,4 +218,45 @@ describe('trigger-ws batch selection', () => {
     await triggerApi.handleAggregate(agentId, 'agent:custom-l2', 1);
     assert.equal(seenSessionKey, 'agent:custom-l2');
   });
+
+  it('uses per-level aggregate prompt from agent config for standard flow', async () => {
+    const configPath = path.join(tmpDir, agentId, 'config.json');
+    const config = readJson(configPath);
+    config.prompts = {
+      ...(config.prompts || {}),
+      aggregate: 'GENERIC AGGREGATE {level}',
+      aggregateBySourceLevel: {
+        L1: 'CUSTOM L1 TO L2 PROMPT'
+      }
+    };
+    fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf8');
+
+    const store = storeApi.createEmptyStore();
+    storeApi.addArtifact(store, 1, {
+      content: 'a1',
+      startTimestamp: '2026-02-10T10:00:00.000Z',
+      endTimestamp: '2026-02-10T10:05:00.000Z'
+    });
+    storeApi.addArtifact(store, 1, {
+      content: 'a2',
+      startTimestamp: '2026-02-10T10:05:00.000Z',
+      endTimestamp: '2026-02-10T10:10:00.000Z'
+    });
+    storeApi.saveStore(agentId, store);
+
+    let seenPrompt = '';
+    triggerApi.setAdapter({
+      async send(_id, message) {
+        seenPrompt = String(message || '');
+        return '<memory_artifact_L2>custom-l2</memory_artifact_L2>\nNO_REPLY';
+      },
+      get lastCaptureInfo() {
+        return { method: 'test', collectedCount: 1 };
+      },
+      async close() {}
+    }, 'test');
+
+    await triggerApi.handleAggregate(agentId, 'agent:custom-l2', 1);
+    assert.match(seenPrompt, /CUSTOM L1 TO L2 PROMPT/);
+  });
 });

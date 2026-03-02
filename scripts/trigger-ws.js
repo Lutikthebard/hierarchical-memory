@@ -290,6 +290,27 @@ function resolveAgentConfig(agentId, options = {}) {
   };
 }
 
+function resolvePerLevelAggregatePrompt(sourceLevel, options = {}, agentConfig = null) {
+  const level = Number(sourceLevel);
+  if (!Number.isInteger(level) || level <= 0) return null;
+
+  const fromMap = (map) => {
+    if (!map || typeof map !== 'object') return null;
+    const byNumeric = String(map[String(level)] || '').trim();
+    if (byNumeric) return byNumeric;
+    const byLabel = String(map[`L${level}`] || map[`l${level}`] || '').trim();
+    return byLabel || null;
+  };
+
+  const fromOptions = fromMap(options.aggregatePromptBySourceLevel);
+  if (fromOptions) return fromOptions;
+
+  const fromConfig = fromMap(agentConfig?.prompts?.aggregateBySourceLevel);
+  if (fromConfig) return fromConfig;
+
+  return null;
+}
+
 async function runL1SummarizationTask({
   agentId,
   sessionKey,
@@ -556,10 +577,7 @@ async function handleAggregate(agentId, sessionKey, sourceLevel, options = {}) {
     windowEnd: endTs
   });
   
-  const levelPromptOverride = options.aggregatePromptBySourceLevel &&
-    typeof options.aggregatePromptBySourceLevel === 'object'
-    ? options.aggregatePromptBySourceLevel[String(sourceLevel)]
-    : null;
+  const levelPromptOverride = resolvePerLevelAggregatePrompt(sourceLevel, options, agentConfig);
 
   const originalPrompt = createAggregationPrompt(artifacts, sourceLevel, targetLevel, agentConfig, {
     promptOverride: levelPromptOverride || options.aggregatePromptOverride || null

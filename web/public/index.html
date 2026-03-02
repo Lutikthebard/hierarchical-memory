@@ -441,6 +441,14 @@
                 <label class="text-xs text-gray-600">Aggregation Prompt (use {level} for source level)</label>
                 <textarea x-model="agentConfig.prompts.aggregate" rows="3" class="w-full border rounded px-2 py-1 text-sm font-mono"></textarea>
               </div>
+              <div>
+                <label class="text-xs text-gray-600">Aggregation Prompts by Source Level (optional, one per line <code>L1: ...</code>)</label>
+                <textarea :value="promptMapText('aggregateBySourceLevel')"
+                          @input="setPromptMap('aggregateBySourceLevel', $event.target.value)"
+                          rows="4"
+                          class="w-full border rounded px-2 py-1 text-sm font-mono"
+                          placeholder="L1: Prompt for L1 -> L2&#10;L2: Prompt for L2 -> L3"></textarea>
+              </div>
             </div>
           </div>
           

@@ -121,9 +121,17 @@
           const response = await fetch(`/api/agents/${this.selectedAgent}/config`);
           const data = await response.json();
           const classFilters = H.normalizeClassFilterArrays(data.filters || {});
+          const aggregateBySourceLevel =
+            data.prompts && typeof data.prompts.aggregateBySourceLevel === 'object' && !Array.isArray(data.prompts.aggregateBySourceLevel)
+              ? data.prompts.aggregateBySourceLevel
+              : {};
           this.agentConfig = {
             thresholds: data.thresholds || { L1: 60, default: 5 },
-            prompts: data.prompts || { l1: '', aggregate: '' },
+            prompts: {
+              l1: data.prompts?.l1 || '',
+              aggregate: data.prompts?.aggregate || '',
+              aggregateBySourceLevel
+            },
             filters: {
               ...(data.filters || {}),
               exclude: data.filters?.exclude || [],

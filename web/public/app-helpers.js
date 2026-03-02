@@ -28,6 +28,31 @@
     return values.map((v) => String(v || '').trim()).filter(Boolean).join('\n');
   }
 
+  function parseKeyValueMap(text) {
+    const out = {};
+    const lines = String(text || '')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean);
+    for (const line of lines) {
+      const idx = line.indexOf(':');
+      if (idx <= 0) continue;
+      const key = line.slice(0, idx).trim();
+      const value = line.slice(idx + 1).trim();
+      if (!key || !value) continue;
+      out[key] = value;
+    }
+    return out;
+  }
+
+  function formatKeyValueMap(map) {
+    if (!map || typeof map !== 'object') return '';
+    return Object.entries(map)
+      .filter(([, value]) => String(value || '').trim())
+      .map(([key, value]) => `${key}: ${value}`)
+      .join('\n');
+  }
+
   function extractTitle(content) {
     if (!content) return 'Untitled';
     const match = content.match(/^##\s*(.+)$/m);
@@ -116,6 +141,8 @@
     normalizeClassFilterArrays,
     parseTextareaList,
     formatTextareaList,
+    parseKeyValueMap,
+    formatKeyValueMap,
     extractTitle,
     formatTime,
     levelNumberFromKey,

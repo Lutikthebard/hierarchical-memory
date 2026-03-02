@@ -18,6 +18,13 @@ function validateAgentConfig(config, messageClasses) {
     return 'learnContext must be an object';
   }
   if (
+    config.prompts &&
+    Object.prototype.hasOwnProperty.call(config.prompts, 'aggregateBySourceLevel') &&
+    (typeof config.prompts.aggregateBySourceLevel !== 'object' || Array.isArray(config.prompts.aggregateBySourceLevel))
+  ) {
+    return 'prompts.aggregateBySourceLevel must be an object';
+  }
+  if (
     config.autoCompact &&
     Object.prototype.hasOwnProperty.call(config.autoCompact, 'postCompactMessage') &&
     typeof config.autoCompact.postCompactMessage !== 'string'
@@ -127,6 +134,13 @@ function validateAgentConfig(config, messageClasses) {
       (typeof config.learnContext.aggregatePromptsByLevel !== 'object' || Array.isArray(config.learnContext.aggregatePromptsByLevel))
     ) {
       return 'learnContext.aggregatePromptsByLevel must be an object';
+    }
+  }
+
+  if (config.prompts && config.prompts.aggregateBySourceLevel) {
+    const invalidPrompt = Object.values(config.prompts.aggregateBySourceLevel).find((value) => typeof value !== 'string');
+    if (typeof invalidPrompt !== 'undefined') {
+      return 'prompts.aggregateBySourceLevel must contain only string values';
     }
   }
 

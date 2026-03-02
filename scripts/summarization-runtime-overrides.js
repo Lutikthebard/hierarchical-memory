@@ -59,6 +59,12 @@ function mergeAgentConfigWithRuntime(baseConfig = {}, runtime = {}) {
           merged.prompts[key] = runtime.prompts[key].trim();
         }
       }
+      if (runtime.prompts.aggregateBySourceLevel && typeof runtime.prompts.aggregateBySourceLevel === 'object') {
+        merged.prompts.aggregateBySourceLevel = {
+          ...(baseConfig.prompts?.aggregateBySourceLevel || {}),
+          ...normalizePromptMap(runtime.prompts.aggregateBySourceLevel)
+        };
+      }
     }
   }
 

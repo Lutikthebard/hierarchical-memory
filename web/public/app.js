@@ -59,6 +59,17 @@ function dashboard() {
       this.agentConfig.autoInjectContext[field] = H.parseTextareaList(value);
     },
 
+    promptMapText(field) {
+      return H.formatKeyValueMap(this.agentConfig?.prompts?.[field]);
+    },
+
+    setPromptMap(field, value) {
+      if (!this.agentConfig.prompts) {
+        this.agentConfig.prompts = {};
+      }
+      this.agentConfig.prompts[field] = H.parseKeyValueMap(value);
+    },
+
     extractTitle(content) {
       return H.extractTitle(content);
     },

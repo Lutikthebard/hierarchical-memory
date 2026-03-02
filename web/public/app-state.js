@@ -84,7 +84,7 @@
       messageClassOptions,
       agentConfig: {
         thresholds: { L1: 60, default: 5 },
-        prompts: { l1: '', aggregate: '' },
+        prompts: { l1: '', aggregate: '', aggregateBySourceLevel: {} },
         filters: {
           exclude: [],
           excludePatterns: [],
