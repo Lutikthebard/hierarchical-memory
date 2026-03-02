@@ -33,6 +33,28 @@
       contextInjectMessage: '',
       compactInjectInProgress: false,
       compactInjectMessage: '',
+      fullSummarizeInProgress: false,
+      fullSummarizeMessage: '',
+      learnContextInProgress: false,
+      learnContextMessage: '',
+      learnContextResult: null,
+      learnContextForm: {
+        fileName: '',
+        fileText: '',
+        wordsPerBlock: 180,
+        fromBlock: '',
+        toBlock: '',
+        learningIntent: '',
+        l1ArtifactPrompt: '',
+        aggregatePrompt: '',
+        aggregatePromptsByLevelText: '',
+        thresholdL1: '',
+        thresholdDefault: '',
+        thresholdByLevelText: '',
+        runFullSummarize: true,
+        maxTargetLevel: '',
+        aggregateBatch: ''
+      },
       memoryClearInProgress: false,
       memoryClearMessage: '',
       showRollbackModal: false,
@@ -85,6 +107,19 @@
           postCompactMessage: '',
           retries: 5,
           retryDelayMs: 3000
+        },
+        learnContext: {
+          wordsPerBlock: 180,
+          fromBlock: null,
+          toBlock: null,
+          learningIntent: '',
+          l1ArtifactPrompt: '',
+          aggregatePrompt: '',
+          aggregatePromptsByLevel: {},
+          runFullSummarize: true,
+          maxTargetLevel: 8,
+          aggregateBatch: null,
+          thresholds: {}
         }
       }
     };

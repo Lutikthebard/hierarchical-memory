@@ -1,5 +1,7 @@
 const { exec } = require('child_process');
 const { promisify } = require('util');
+const { resolveThresholdForLevel } = require('./summarization-thresholds');
+const { archiveSummarizedL0Messages } = require('./summarization-l0-archive');
 
 function createSummarizationOrchestrator(deps) {
   const execAsync = promisify(exec);
@@ -22,24 +24,7 @@ function createSummarizationOrchestrator(deps) {
 
   function resolveThreshold(agentId, level) {
     const agentConfig = loadAgentConfig ? loadAgentConfig(agentId) : null;
-    const explicitLevel = agentConfig?.thresholds?.[`L${level}`];
-    if (Number.isFinite(Number(explicitLevel)) && Number(explicitLevel) > 0) {
-      return Number(explicitLevel);
-    }
-
-    if (level === 1) {
-      const l1 = agentConfig?.thresholds?.L1;
-      if (Number.isFinite(Number(l1)) && Number(l1) > 0) {
-        return Number(l1);
-      }
-    }
-
-    const fallbackDefault = agentConfig?.thresholds?.default;
-    if (Number.isFinite(Number(fallbackDefault)) && Number(fallbackDefault) > 0) {
-      return Number(fallbackDefault);
-    }
-
-    return getThresholdForLevel(level);
+    return resolveThresholdForLevel(agentConfig, level, getThresholdForLevel(level));
   }
 
   async function runSummarization(agentId, sourceLevel) {
@@ -86,17 +71,13 @@ function createSummarizationOrchestrator(deps) {
       console.log(`   Artifacts now: L1=${(updatedStore.artifacts[1] || []).length}`);
 
       if (sourceLevel === 0) {
-        const lastTs = getLastSummarizedTimestamp(updatedStore, 1);
-        if (lastTs) {
-          const toArchive = updatedStore.messages.filter((m) => new Date(m.timestamp) <= new Date(lastTs));
-          if (toArchive.length > 0) {
-            console.log(`📦 Archiving ${toArchive.length} summarized messages...`);
-            archiveMessages(agentId, toArchive);
-            const removed = removeSummarizedMessages(updatedStore, lastTs);
-            saveStore(agentId, updatedStore);
-            console.log(`   Archived and removed ${removed} messages from store`);
-          }
-        }
+        archiveSummarizedL0Messages(agentId, updatedStore, {
+          getLastSummarizedTimestamp,
+          archiveMessages,
+          removeSummarizedMessages,
+          saveStore,
+          logger: console
+        });
       }
 
       const targetLevel = sourceLevel + 1;

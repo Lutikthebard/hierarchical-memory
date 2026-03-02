@@ -41,6 +41,7 @@ test('frontend dashboard module composition', () => {
   loadScript(ctx, 'web/public/app-state.js');
   loadScript(ctx, 'web/public/app-methods-data.js');
   loadScript(ctx, 'web/public/app-methods-memory-session.js');
+  loadScript(ctx, 'web/public/app-methods-memory-learn.js');
   loadScript(ctx, 'web/public/app-methods-memory-rollback.js');
   loadScript(ctx, 'web/public/app-methods-memory.js');
   loadScript(ctx, 'web/public/app-methods-agents.js');
@@ -51,6 +52,9 @@ test('frontend dashboard module composition', () => {
   const d = ctx.dashboard();
   assert.equal(typeof d.loadAgents, 'function');
   assert.equal(typeof d.rebuildContext, 'function');
+  assert.equal(typeof d.fullSummarize, 'function');
+  assert.equal(typeof d.runLearnContext, 'function');
+  assert.equal(typeof d.fillLearnContextFormFromConfig, 'function');
   assert.equal(typeof d.drilldown, 'function');
   assert.equal(typeof d.toggleClass, 'function');
   assert.equal(d.stats.threshold, 60);
@@ -87,6 +91,7 @@ test('rollbackCutoffIso getter stays reactive', () => {
   loadScript(ctx, 'web/public/app-state.js');
   loadScript(ctx, 'web/public/app-methods-data.js');
   loadScript(ctx, 'web/public/app-methods-memory-session.js');
+  loadScript(ctx, 'web/public/app-methods-memory-learn.js');
   loadScript(ctx, 'web/public/app-methods-memory-rollback.js');
   loadScript(ctx, 'web/public/app-methods-memory.js');
   loadScript(ctx, 'web/public/app-methods-agents.js');

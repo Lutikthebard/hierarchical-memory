@@ -122,6 +122,39 @@
         }
       },
 
+      async fullSummarize() {
+        if (!this.selectedAgent || this.fullSummarizeInProgress) return;
+        this.fullSummarizeInProgress = true;
+        this.fullSummarizeMessage = '';
+
+        try {
+          const response = await fetch(`/api/agents/${this.selectedAgent}/memory/summarize-full`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({})
+          });
+          const data = await response.json();
+          if (!response.ok || !data.success) {
+            throw new Error(data.error || `HTTP ${response.status}`);
+          }
+
+          const passes = Array.isArray(data.run?.passes) ? data.run.passes.length : 0;
+          this.fullSummarizeMessage = `Full summarize completed (${passes} passes)`;
+          await Promise.all([
+            this.loadAgentData(),
+            this.loadSessionInfo()
+          ]);
+        } catch (e) {
+          console.error('Full summarize failed:', e);
+          this.fullSummarizeMessage = `Full summarize failed: ${e.message}`;
+        } finally {
+          this.fullSummarizeInProgress = false;
+          setTimeout(() => {
+            this.fullSummarizeMessage = '';
+          }, 6000);
+        }
+      },
+
       async clearAgentMemory() {
         if (!this.selectedAgent || this.memoryClearInProgress) return;
         const warning = [

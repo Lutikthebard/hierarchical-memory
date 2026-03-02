@@ -149,8 +149,25 @@
               retries: 5,
               retryDelayMs: 3000,
               ...(data.autoCompact || {})
+            },
+            learnContext: {
+              wordsPerBlock: 180,
+              fromBlock: null,
+              toBlock: null,
+              learningIntent: '',
+              l1ArtifactPrompt: '',
+              aggregatePrompt: '',
+              aggregatePromptsByLevel: {},
+              runFullSummarize: true,
+              maxTargetLevel: 8,
+              aggregateBatch: null,
+              thresholds: {},
+              ...(data.learnContext || {})
             }
           };
+          if (typeof this.fillLearnContextFormFromConfig === 'function') {
+            this.fillLearnContextFormFromConfig();
+          }
         } catch (e) {
           console.error('Failed to load agent config:', e);
         }

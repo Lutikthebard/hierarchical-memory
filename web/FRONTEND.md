@@ -86,6 +86,7 @@ Message classes:
 - `POST /api/agents/:id/context/rebuild`
 - `POST /api/agents/:id/context/inject`
 - `POST /api/agents/:id/compact-with-inject`
+- `POST /api/agents/:id/memory/summarize-full`
 - `POST /api/agents/:id/memory/clear`
 - `POST /api/agents/:id/memory/rollback/preview`
 - `POST /api/agents/:id/memory/rollback`

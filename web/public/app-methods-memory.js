@@ -3,6 +3,7 @@
     const from = (factory) => (typeof factory === 'function' ? factory(H) : {});
     return {
       ...from(globalObj.HmAppMemorySessionMethods?.createMethods),
+      ...from(globalObj.HmAppMemoryLearnMethods?.createMethods),
       ...from(globalObj.HmAppMemoryRollbackMethods?.createMethods)
     };
   }

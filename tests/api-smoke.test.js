@@ -11,6 +11,7 @@ const DATA_DIR = path.join(TMP_ROOT, 'data');
 const AGENTS_PATH = path.join(TMP_ROOT, 'agents.json');
 const PORT = 20000 + Math.floor(Math.random() * 20000);
 const AGENT_ID = 'api-smoke-agent';
+const FULL_AGENT_ID = 'api-smoke-full-agent';
 
 process.env.HM_DATA_DIR = DATA_DIR;
 
@@ -33,8 +34,12 @@ async function waitForServer(url, timeoutMs = 10000) {
 describe('dashboard/api localhost smoke', () => {
   it('serves agent stats/store/context for isolated test data', async () => {
     fs.mkdirSync(path.join(DATA_DIR, AGENT_ID), { recursive: true });
+    fs.mkdirSync(path.join(DATA_DIR, FULL_AGENT_ID), { recursive: true });
     fs.writeFileSync(AGENTS_PATH, JSON.stringify({
-      agents: [{ id: AGENT_ID, name: AGENT_ID, enabled: false, isSubagent: false }]
+      agents: [
+        { id: AGENT_ID, name: AGENT_ID, enabled: false, isSubagent: false },
+        { id: FULL_AGENT_ID, name: FULL_AGENT_ID, enabled: false, isSubagent: false }
+      ]
     }, null, 2), 'utf8');
 
     const store = createEmptyStore();
@@ -145,11 +150,70 @@ describe('dashboard/api localhost smoke', () => {
       'utf8'
     );
 
+    const fullSessionId = 'api-smoke-full-session';
+    const fullSessionsDir = path.join(openclawAgentsDir, FULL_AGENT_ID, 'sessions');
+    fs.mkdirSync(fullSessionsDir, { recursive: true });
+    const fullSessionPath = path.join(fullSessionsDir, `${fullSessionId}.jsonl`);
+    fs.writeFileSync(
+      fullSessionPath,
+      [
+        JSON.stringify({
+          type: 'message',
+          timestamp: '2026-02-06T10:06:00.000Z',
+          message: {
+            role: 'user',
+            content: 'full-s1',
+            timestamp: '2026-02-06T10:06:00.000Z'
+          }
+        }),
+        JSON.stringify({
+          type: 'message',
+          timestamp: '2026-02-06T10:07:00.000Z',
+          message: {
+            role: 'assistant',
+            content: 'full-s2',
+            timestamp: '2026-02-06T10:07:00.000Z'
+          }
+        })
+      ].join('\n') + '\n',
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(DATA_DIR, FULL_AGENT_ID, 'last-session.json'),
+      JSON.stringify({
+        sessionId: fullSessionId,
+        sessionKey: `agent:${FULL_AGENT_ID}:main`,
+        jsonlPath: fullSessionPath
+      }, null, 2),
+      'utf8'
+    );
+
+    const fullStore = createEmptyStore();
+    addArtifact(fullStore, 1, {
+      content: 'FULL smoke L1 artifact',
+      startTimestamp: '2026-02-06T10:00:00.000Z',
+      endTimestamp: '2026-02-06T10:05:00.000Z',
+      messageCount: 3
+    });
+    addMessage(fullStore, {
+      role: 'user',
+      content: 'full-recent-1',
+      timestamp: '2026-02-06T10:06:00.000Z'
+    });
+    addMessage(fullStore, {
+      role: 'assistant',
+      content: 'full-recent-2',
+      timestamp: '2026-02-06T10:07:00.000Z'
+    });
+    saveStore(FULL_AGENT_ID, fullStore);
+    fs.writeFileSync(path.join(DATA_DIR, FULL_AGENT_ID, 'CONTEXT.md'), '# Memory Context\n\n## MEMORY (LEVEL 1)\n\nFULL smoke L1 artifact\n', 'utf8');
+
     const server = spawn('node', [path.join(ROOT_DIR, 'web/server.js')], {
       cwd: ROOT_DIR,
       env: {
         ...process.env,
         PORT: String(PORT),
+        HM_LLM_MODE: 'mock',
         HM_DATA_DIR: DATA_DIR,
         HM_AGENTS_CONFIG_PATH: AGENTS_PATH,
         OPENCLAW_AGENTS_DIR: openclawAgentsDir
@@ -205,6 +269,49 @@ describe('dashboard/api localhost smoke', () => {
       const contextPayload = await contextRes.json();
       assert.match(contextPayload.content, /Memory Context/);
 
+      const fullSummarizeRes = await fetch(`http://127.0.0.1:${PORT}/api/agents/${FULL_AGENT_ID}/memory/summarize-full`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
+      });
+      const fullSummarizePayload = await fullSummarizeRes.json();
+      assert.equal(fullSummarizeRes.ok, true, JSON.stringify(fullSummarizePayload));
+      assert.equal(fullSummarizePayload.success, true);
+      assert.equal(Array.isArray(fullSummarizePayload.run?.passes), true);
+      assert.equal(fullSummarizePayload.run.passes.length > 0, true);
+
+      const storeAfterFullRes = await fetch(`http://127.0.0.1:${PORT}/api/agents/${FULL_AGENT_ID}/store`);
+      const storeAfterFullPayload = await storeAfterFullRes.json();
+      assert.equal(storeAfterFullPayload.recentMessages.length, 0);
+
+      const learnContextRes = await fetch(`http://127.0.0.1:${PORT}/api/agents/${AGENT_ID}/memory/learn-context`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: 'one two three four five six seven eight nine ten',
+          wordsPerBlock: 2,
+          fromBlock: 2,
+          toBlock: 4,
+          learningIntent: 'Extract durable memory facts.',
+          l1ArtifactPrompt: 'Keep concise bullet structure.',
+          runFullSummarize: true,
+          maxTargetLevel: 4,
+          aggregateBatch: 2,
+          thresholds: { L2: 2, default: 2 },
+          aggregatePromptsByLevel: { '1': 'Custom L1->L2 aggregate prompt' }
+        })
+      });
+      const learnContextPayload = await learnContextRes.json();
+      assert.equal(learnContextRes.ok, true, JSON.stringify(learnContextPayload));
+      assert.equal(learnContextPayload.success, true);
+      assert.equal(learnContextPayload.run.blocks.selected, 3);
+      assert.equal(learnContextPayload.run.l1.attempted, 3);
+      assert.equal(Array.isArray(learnContextPayload.run.fullSummarize.run?.passes), true);
+
+      const storeAfterLearnRes = await fetch(`http://127.0.0.1:${PORT}/api/agents/${AGENT_ID}/store`);
+      const storeAfterLearnPayload = await storeAfterLearnRes.json();
+      assert.equal(storeAfterLearnPayload.artifacts.L1.length >= 2, true);
+
       const inject404Res = await fetch(`http://127.0.0.1:${PORT}/api/agents/missing-agent/context/inject`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -223,6 +330,20 @@ describe('dashboard/api localhost smoke', () => {
         body: JSON.stringify({})
       });
       assert.equal(compactInject404Res.status, 404);
+
+      const summarizeFull404Res = await fetch(`http://127.0.0.1:${PORT}/api/agents/missing-agent/memory/summarize-full`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
+      });
+      assert.equal(summarizeFull404Res.status, 404);
+
+      const learnContext404Res = await fetch(`http://127.0.0.1:${PORT}/api/agents/missing-agent/memory/learn-context`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'x y z', wordsPerBlock: 2 })
+      });
+      assert.equal(learnContext404Res.status, 404);
 
       const logsRes = await fetch(`http://127.0.0.1:${PORT}/api/agents/${AGENT_ID}/logs?lines=10`);
       const logsPayload = await logsRes.json();
@@ -250,7 +371,20 @@ describe('dashboard/api localhost smoke', () => {
           preMdFiles: ['README.md'],
           postMdFiles: []
         },
-        autoCompact: { enabled: false, messageThreshold: 150, postCompactMessage: '' }
+        autoCompact: { enabled: false, messageThreshold: 150, postCompactMessage: '' },
+        learnContext: {
+          wordsPerBlock: 120,
+          fromBlock: null,
+          toBlock: null,
+          learningIntent: 'Default learning intent',
+          l1ArtifactPrompt: 'Default L1 learn prompt',
+          aggregatePrompt: 'Default aggregate learn prompt',
+          aggregatePromptsByLevel: { L1: 'L1->L2 learn prompt' },
+          runFullSummarize: true,
+          maxTargetLevel: 6,
+          aggregateBatch: 3,
+          thresholds: { L2: 2, default: 2 }
+        }
       };
 
       const saveConfigRes = await fetch(`http://127.0.0.1:${PORT}/api/agents/${AGENT_ID}/config`, {
@@ -268,6 +402,9 @@ describe('dashboard/api localhost smoke', () => {
       assert.deepEqual(getConfigPayload.filters.countMessageClasses, ['dialogue']);
       assert.equal(getConfigPayload.autoInjectContext.preText, 'before');
       assert.deepEqual(getConfigPayload.autoInjectContext.preMdFiles, ['README.md']);
+      assert.equal(getConfigPayload.learnContext.wordsPerBlock, 120);
+      assert.equal(getConfigPayload.learnContext.learningIntent, 'Default learning intent');
+      assert.equal(getConfigPayload.learnContext.aggregatePromptsByLevel.L1, 'L1->L2 learn prompt');
 
       const rollbackPreviewRes = await fetch(`http://127.0.0.1:${PORT}/api/agents/${AGENT_ID}/memory/rollback/preview`, {
         method: 'POST',
@@ -356,7 +493,7 @@ describe('dashboard/api localhost smoke', () => {
       assert.equal(clearRes.ok, true);
       assert.equal(clearPayload.success, true);
       assert.equal(clearPayload.removed.storeMessages, 2);
-      assert.equal(clearPayload.removed.artifacts, 4);
+      assert.equal(clearPayload.removed.artifacts >= 4, true);
       assert.equal(clearPayload.removed.archivedFiles, 1);
       assert.equal(clearPayload.removed.contextFileRemoved, true);
 

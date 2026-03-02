@@ -32,6 +32,19 @@ const DEFAULT_AGENT_CONFIG = {
     postCompactMessage: '',
     retries: 5,
     retryDelayMs: 3000
+  },
+  learnContext: {
+    wordsPerBlock: 180,
+    fromBlock: null,
+    toBlock: null,
+    learningIntent: '',
+    l1ArtifactPrompt: '',
+    aggregatePrompt: '',
+    aggregatePromptsByLevel: {},
+    runFullSummarize: true,
+    maxTargetLevel: 8,
+    aggregateBatch: null,
+    thresholds: {}
   }
 };
 
@@ -101,7 +114,8 @@ function loadAgentConfig(agentId) {
     prompts: { ...DEFAULT_AGENT_CONFIG.prompts, ...agentConfig.prompts },
     filters: { ...DEFAULT_AGENT_CONFIG.filters, ...agentConfig.filters },
     autoInjectContext: { ...DEFAULT_AGENT_CONFIG.autoInjectContext, ...agentConfig.autoInjectContext },
-    autoCompact: { ...DEFAULT_AGENT_CONFIG.autoCompact, ...globalAutoCompact, ...agentConfig.autoCompact }
+    autoCompact: { ...DEFAULT_AGENT_CONFIG.autoCompact, ...globalAutoCompact, ...agentConfig.autoCompact },
+    learnContext: { ...DEFAULT_AGENT_CONFIG.learnContext, ...agentConfig.learnContext }
   };
 }
 

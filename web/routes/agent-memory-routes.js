@@ -1,3 +1,6 @@
+const { registerAgentMemoryFullSummarizationRoute } = require('./agent-memory-full-summarization-route');
+const { registerAgentMemoryLearnContextRoute } = require('./agent-memory-learn-context-route');
+
 function registerAgentMemoryRoutes(app, ctx) {
   const {
     store,
@@ -9,16 +12,16 @@ function registerAgentMemoryRoutes(app, ctx) {
     getAgentDataDir,
     ensureAgentDataDir,
     clearAgentMemoryData,
-    runningWatchers,
-    startWatcher,
-    stopWatcher,
+    watcherMaintenance,
     sendCompactMessage,
     rebuildContextFile,
     injectCurrentContext,
     rollbackService,
     countJsonlLines,
     waitForCompaction,
-    resolveActionSession
+    resolveActionSession,
+    runFullSummarization,
+    runLearnContext
   } = ctx;
 
   function requireAgent(id, res) {
@@ -30,6 +33,32 @@ function registerAgentMemoryRoutes(app, ctx) {
     }
     return agent;
   }
+
+  registerAgentMemoryFullSummarizationRoute(app, {
+    ...ctx,
+    path,
+    scriptsDir,
+    watcherMaintenance,
+    ensureAgentDataDir,
+    getAgentDataDir,
+    rebuildContextFile,
+    resolveActionSession,
+    runFullSummarization,
+    requireAgent
+  });
+
+  registerAgentMemoryLearnContextRoute(app, {
+    ...ctx,
+    path,
+    scriptsDir,
+    watcherMaintenance,
+    ensureAgentDataDir,
+    getAgentDataDir,
+    rebuildContextFile,
+    resolveActionSession,
+    runLearnContext,
+    requireAgent
+  });
 
   app.post('/api/agents/:id/context/rebuild', async (req, res) => {
     const { id } = req.params;
@@ -191,32 +220,24 @@ function registerAgentMemoryRoutes(app, ctx) {
     if (!agent) return;
 
     try {
-      const watcherWasRunning = runningWatchers.has(id);
-      if (watcherWasRunning) {
-        stopWatcher(id);
-        await new Promise((resolve) => setTimeout(resolve, 300));
-      }
-
-      const removed = clearAgentMemoryData(id);
-
-      let watcherRestarted = false;
-      if (watcherWasRunning) {
-        const restartResult = startWatcher(id);
-        watcherRestarted = restartResult.success === true;
-        if (!watcherRestarted) {
-          return res.status(500).json({
-            error: `Memory cleared but failed to restart watcher: ${restartResult.message || 'unknown error'}`,
-            watcherWasRunning,
-            removed
-          });
-        }
-      }
+      const run = await watcherMaintenance.withPausedWatcher(
+        id,
+        async () => ({ removed: clearAgentMemoryData(id) }),
+        { restartErrorPrefix: 'Memory cleared but failed to restart watcher' }
+      );
+      const removed = run.result?.removed || {
+        storeMessages: 0,
+        artifacts: 0,
+        archivedFiles: 0,
+        contextFileRemoved: false,
+        artifactsFileRemoved: false
+      };
 
       res.json({
         success: true,
         agentId: id,
-        watcherWasRunning,
-        watcherRestarted,
+        watcherWasRunning: run.watcherWasRunning,
+        watcherRestarted: run.watcherRestarted,
         removed,
         clearedAt: new Date().toISOString()
       });
@@ -250,32 +271,22 @@ function registerAgentMemoryRoutes(app, ctx) {
 
     try {
       const cutoffTs = rollbackService.parseCutoff(req.body?.cutoffTs);
-      const watcherWasRunning = runningWatchers.has(id);
-      if (watcherWasRunning) {
-        stopWatcher(id);
-        await new Promise((resolve) => setTimeout(resolve, 300));
-      }
-
-      let result;
-      try {
-        result = rollbackService.applyRollback(id, cutoffTs);
-        ensureAgentDataDir(id);
-        const contextPath = path.join(getAgentDataDir(id), 'CONTEXT.md');
-        await rebuildContextFile({
-          agentId: id,
-          contextPath,
-          scriptDir: scriptsDir
-        });
-      } finally {
-        if (watcherWasRunning) {
-          const restartResult = startWatcher(id);
-          if (!restartResult.success) {
-            return res.status(500).json({
-              error: `Rollback applied but watcher failed to restart: ${restartResult.message || 'unknown error'}`
-            });
-          }
-        }
-      }
+      const run = await watcherMaintenance.withPausedWatcher(
+        id,
+        async () => {
+          const result = rollbackService.applyRollback(id, cutoffTs);
+          ensureAgentDataDir(id);
+          const contextPath = path.join(getAgentDataDir(id), 'CONTEXT.md');
+          await rebuildContextFile({
+            agentId: id,
+            contextPath,
+            scriptDir: scriptsDir
+          });
+          return { result };
+        },
+        { restartErrorPrefix: 'Rollback applied but watcher failed to restart' }
+      );
+      const result = run.result.result;
 
       res.json({
         success: true,
@@ -284,7 +295,7 @@ function registerAgentMemoryRoutes(app, ctx) {
         backupId: result.backupId,
         result: result.result,
         removed: result.removed,
-        watcherWasRunning,
+        watcherWasRunning: run.watcherWasRunning,
         rolledBackAt: new Date().toISOString()
       });
     } catch (e) {
@@ -302,38 +313,28 @@ function registerAgentMemoryRoutes(app, ctx) {
     if (!agent) return;
 
     try {
-      const watcherWasRunning = runningWatchers.has(id);
-      if (watcherWasRunning) {
-        stopWatcher(id);
-        await new Promise((resolve) => setTimeout(resolve, 300));
-      }
-
-      let restore;
-      try {
-        restore = rollbackService.restoreRollback(id, backupId);
-        ensureAgentDataDir(id);
-        const contextPath = path.join(getAgentDataDir(id), 'CONTEXT.md');
-        await rebuildContextFile({
-          agentId: id,
-          contextPath,
-          scriptDir: scriptsDir
-        });
-      } finally {
-        if (watcherWasRunning) {
-          const restartResult = startWatcher(id);
-          if (!restartResult.success) {
-            return res.status(500).json({
-              error: `Backup restored but watcher failed to restart: ${restartResult.message || 'unknown error'}`
-            });
-          }
-        }
-      }
+      const run = await watcherMaintenance.withPausedWatcher(
+        id,
+        async () => {
+          const restore = rollbackService.restoreRollback(id, backupId);
+          ensureAgentDataDir(id);
+          const contextPath = path.join(getAgentDataDir(id), 'CONTEXT.md');
+          await rebuildContextFile({
+            agentId: id,
+            contextPath,
+            scriptDir: scriptsDir
+          });
+          return { restore };
+        },
+        { restartErrorPrefix: 'Backup restored but watcher failed to restart' }
+      );
+      const restore = run.result.restore;
 
       res.json({
         success: true,
         agentId: id,
         backupId: restore.backupId,
-        watcherWasRunning,
+        watcherWasRunning: run.watcherWasRunning,
         restoredAt: new Date().toISOString()
       });
     } catch (e) {

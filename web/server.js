@@ -17,6 +17,8 @@ const {
   injectCurrentContext
 } = require('../scripts/context-actions');
 const rollbackService = require('../scripts/rollback-service');
+const { createFullSummarizationService } = require('../scripts/full-summarization-service');
+const { createLearnContextService } = require('../scripts/learn-context-service');
 const {
   loadLastSessionBinding,
   saveLastSessionBinding
@@ -29,12 +31,17 @@ const { parseContextSections } = require('./services/context-sections');
 const { validateAgentConfig } = require('./services/config-validation');
 const { resolveActionSession: resolveActionSessionBase } = require('./services/action-session');
 const { attachLogsWebsocket } = require('./services/logs-ws');
+const { createWatcherMaintenance } = require('./services/watcher-maintenance');
 const { registerAgentRoutes } = require('./routes/agent-routes');
 const { registerArtifactRoutes } = require('./routes/artifact-routes');
 const { registerLegacyRoutes } = require('./routes/legacy-routes');
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3458', 10);
+const fullSummarizationService = createFullSummarizationService();
+const learnContextService = createLearnContextService({
+  runFullSummarization: fullSummarizationService.runFullSummarization
+});
 
 // Paths
 const BASE_DIR = path.join(__dirname, '..');
@@ -244,7 +251,14 @@ const agentHandlers = registerAgentRoutes(app, {
   saveLastSessionBinding,
   countJsonlLines,
   waitForCompaction,
-  resolveActionSessionBase
+  resolveActionSessionBase,
+  watcherMaintenance: createWatcherMaintenance({
+    runningWatchers,
+    stopWatcher,
+    startWatcher
+  }),
+  runFullSummarization: fullSummarizationService.runFullSummarization,
+  runLearnContext: learnContextService.runLearnContext
 });
 
 registerArtifactRoutes(app, { store, handleArtifactDrilldown: agentHandlers.handleArtifactDrilldown });

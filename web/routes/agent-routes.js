@@ -40,7 +40,10 @@ function registerAgentRoutes(app, deps) {
     countJsonlLines,
     waitForCompaction,
     resolveActionSessionBase,
-    fsSync
+    fsSync,
+    watcherMaintenance,
+    runFullSummarization,
+    runLearnContext
   } = deps;
 
   async function getSessionMessageCount(agentId) {
@@ -209,6 +212,9 @@ function registerAgentRoutes(app, deps) {
     saveLastSessionBinding,
     countJsonlLines,
     waitForCompaction,
+    watcherMaintenance,
+    runFullSummarization,
+    runLearnContext,
     resolveActionSession,
     handleAgentStats,
     handleAgentStore,
