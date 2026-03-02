@@ -179,8 +179,9 @@ Threshold overrides:
 
 Behavior:
 - splits text into word blocks,
-- creates L1 artifacts block-by-block,
-- optionally runs full summarization from `sourceLevel=1` upward,
+- sends selected blocks to active agent session as regular chat messages,
+- ingests those blocks into L0 store,
+- optionally runs full summarization from `sourceLevel=0` upward,
 - rebuilds `CONTEXT.md`,
 - resumes watcher and returns ingestion/summarization report.
 

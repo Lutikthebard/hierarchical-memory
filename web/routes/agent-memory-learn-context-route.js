@@ -1,30 +1,12 @@
 const { toPositiveInt } = require('../../scripts/summarization-thresholds');
 
-function normalizeAggregatePromptMap(raw) {
-  if (!raw || typeof raw !== 'object') return {};
-  const out = {};
-
-  for (const [key, value] of Object.entries(raw)) {
-    const prompt = String(value || '').trim();
-    if (!prompt) continue;
-
-    const rawKey = String(key || '').trim();
-    const fromLabel = rawKey.match(/^L(\d+)$/i);
-    const parsed = fromLabel ? Number(fromLabel[1]) : Number(rawKey);
-    if (!Number.isFinite(parsed) || parsed <= 0) continue;
-    out[String(Math.floor(parsed))] = prompt;
-  }
-
-  return out;
-}
-
 function registerAgentMemoryLearnContextRoute(app, ctx) {
   const {
     ensureAgentDataDir,
     getAgentDataDir,
     path,
     scriptsDir,
-    watcherMaintenance,
+    runningWatchers,
     rebuildContextFile,
     resolveActionSession,
     runLearnContext,
@@ -32,6 +14,31 @@ function registerAgentMemoryLearnContextRoute(app, ctx) {
   } = ctx;
 
   const runningByAgent = new Set();
+  const controllersByAgent = new Map();
+
+  app.post('/api/agents/:id/memory/learn-context/stop', async (req, res) => {
+    const { id } = req.params;
+    const agent = requireAgent(id, res);
+    if (!agent) return;
+
+    const controller = controllersByAgent.get(id);
+    if (!controller) {
+      return res.json({
+        success: true,
+        agentId: id,
+        running: false,
+        cancelRequested: false
+      });
+    }
+
+    controller.cancelRequested = true;
+    return res.json({
+      success: true,
+      agentId: id,
+      running: true,
+      cancelRequested: true
+    });
+  });
 
   app.post('/api/agents/:id/memory/learn-context', async (req, res) => {
     const { id } = req.params;
@@ -48,79 +55,69 @@ function registerAgentMemoryLearnContextRoute(app, ctx) {
     const toBlock = toPositiveInt(req.body?.toBlock) || null;
     const learningIntent = String(req.body?.learningIntent || '');
     const l1ArtifactPrompt = String(req.body?.l1ArtifactPrompt || '');
-    const aggregatePrompt = String(req.body?.aggregatePrompt || '');
-    const thresholds = req.body?.thresholds && typeof req.body.thresholds === 'object'
-      ? req.body.thresholds
-      : {};
-    const aggregatePromptsByLevel = normalizeAggregatePromptMap(req.body?.aggregatePromptsByLevel || {});
-
-    const fullOptions = req.body?.fullSummarize && typeof req.body.fullSummarize === 'object'
-      ? req.body.fullSummarize
-      : {};
-    const runFullSummarize = req.body?.runFullSummarize === false
-      ? false
-      : fullOptions.enabled !== false;
-    const maxTargetLevel = toPositiveInt(req.body?.maxTargetLevel) || toPositiveInt(fullOptions.maxTargetLevel) || null;
-    const aggregateBatch = toPositiveInt(req.body?.aggregateBatch) || toPositiveInt(fullOptions.aggregateBatch) || null;
 
     runningByAgent.add(id);
+    const controller = {
+      cancelRequested: false,
+      startedAt: Date.now()
+    };
+    controllersByAgent.set(id, controller);
+
     try {
       const session = await resolveActionSession(id, agent.isSubagent || false);
-      const run = await watcherMaintenance.withPausedWatcher(
-        id,
-        async () => {
-          const learnResult = await runLearnContext({
-            agentId: id,
-            sessionKey: session.sessionKey,
-            text,
-            wordsPerBlock,
-            fromBlock,
-            toBlock,
-            learningIntent,
-            l1ArtifactPrompt,
-            thresholds,
-            aggregatePrompt,
-            aggregatePromptsByLevel,
-            runFullSummarize,
-            maxTargetLevel,
-            aggregateBatch
-          });
+      const learnResult = await runLearnContext({
+        agentId: id,
+        sessionKey: session.sessionKey,
+        text,
+        wordsPerBlock,
+        fromBlock,
+        toBlock,
+        learningIntent,
+        l1ArtifactPrompt,
+        shouldCancel: () => controller.cancelRequested === true
+      });
 
-          ensureAgentDataDir(id);
-          const contextPath = path.join(getAgentDataDir(id), 'CONTEXT.md');
-          await rebuildContextFile({
-            agentId: id,
-            contextPath,
-            scriptDir: scriptsDir
-          });
+      ensureAgentDataDir(id);
+      const contextPath = path.join(getAgentDataDir(id), 'CONTEXT.md');
+      await rebuildContextFile({
+        agentId: id,
+        contextPath,
+        scriptDir: scriptsDir
+      });
 
-          return {
-            learnResult,
-            contextPath
-          };
-        },
-        { restartErrorPrefix: 'Learn Context completed but watcher failed to restart' }
-      );
+      const watcherRunning = runningWatchers?.has(id) === true;
 
       return res.json({
         success: true,
         agentId: id,
         session,
-        watcherWasRunning: run.watcherWasRunning,
-        watcherRestarted: run.watcherRestarted,
-        contextPath: run.result.contextPath,
-        run: run.result.learnResult,
+        watcherWasRunning: watcherRunning,
+        watcherRestarted: false,
+        contextPath,
+        run: learnResult,
         completedAt: new Date().toISOString()
       });
     } catch (e) {
+      if (e && e.code === 'LEARN_CONTEXT_CANCELLED') {
+        return res.status(409).json({
+          success: false,
+          cancelled: true,
+          agentId: id,
+          error: e.message,
+          run: {
+            sentToSession: Number(e.sentToSession) || 0,
+            totalChunks: Number(e.totalChunks) || 0
+          }
+        });
+      }
       return res.status(500).json({ error: e.message });
     } finally {
       runningByAgent.delete(id);
+      controllersByAgent.delete(id);
     }
   });
 }
 
 module.exports = {
-  registerAgentMemoryLearnContextRoute,
-  normalizeAggregatePromptMap
+  registerAgentMemoryLearnContextRoute
 };

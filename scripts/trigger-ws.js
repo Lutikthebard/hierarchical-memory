@@ -23,6 +23,7 @@ const { createLLMAdapterFromEnv } = require('./llm-adapter');
 const {
   loadStore,
   saveStore,
+  updateStore,
   addArtifact,
   selectSummarizationBatch,
   checkThreshold,
@@ -69,6 +70,21 @@ function logTelemetry(agentId, payload) {
 
 function resolveOverrideThreshold(override, configuredThreshold) {
   return toPositiveInt(override) || configuredThreshold;
+}
+
+async function persistArtifact(agentId, targetLevel, payload) {
+  if (typeof updateStore === 'function') {
+    const committed = await updateStore(agentId, (latestStore) => {
+      const createdArtifact = addArtifact(latestStore, targetLevel, payload);
+      return { createdArtifact };
+    });
+    return committed?.result?.createdArtifact || null;
+  }
+
+  const latestStore = loadStore(agentId);
+  const createdArtifact = addArtifact(latestStore, targetLevel, payload);
+  saveStore(agentId, latestStore);
+  return createdArtifact || null;
 }
 
 /**
@@ -326,7 +342,6 @@ async function runL1SummarizationTask({
     throw new Error('messages are required for L1 summarization');
   }
 
-  const store = loadStore(agentId);
   const requestId = crypto.randomUUID();
   const ordered = [...messages].sort(
     (a, b) => new Date(a?.timestamp || 0).getTime() - new Date(b?.timestamp || 0).getTime()
@@ -435,14 +450,13 @@ async function runL1SummarizationTask({
     }
   }
 
-  const createdArtifact = addArtifact(store, targetLevel, {
+  const createdArtifact = await persistArtifact(agentId, targetLevel, {
     content: artifact,
     startTimestamp: startTs,
     endTimestamp: endTs,
     messageCount: ordered.length
   });
 
-  saveStore(agentId, store);
   logTelemetry(agentId, {
     eventType: createdArtifact ? 'artifact_processed' : 'artifact_duplicate',
     requestId,
@@ -461,7 +475,12 @@ async function runL1SummarizationTask({
   console.log(`[trigger]    Time range: ${formatTimestamp(startTs)} → ${formatTimestamp(endTs)}`);
   console.log(`[trigger]    Messages: ${ordered.length}`);
 
-  return createdArtifact || null;
+  return {
+    artifact: createdArtifact || null,
+    summarizedMessageTimestamps: ordered.map((message) => message.timestamp).filter(Boolean),
+    startTimestamp: startTs,
+    endTimestamp: endTs
+  };
 }
 
 /**
@@ -495,7 +514,7 @@ async function handleL1(agentId, sessionKey, options = {}) {
     return;
   }
 
-  await runL1SummarizationTask({
+  return runL1SummarizationTask({
     agentId,
     sessionKey,
     messages: selected.batch,
@@ -662,15 +681,14 @@ async function handleAggregate(agentId, sessionKey, sourceLevel, options = {}) {
   }
   
   // Add to store - use known timestamps, artifact is just the content text
-  const createdArtifact = addArtifact(store, targetLevel, {
+  const createdArtifact = await persistArtifact(agentId, targetLevel, {
     content: artifact,  // artifact is now just the summary text
     startTimestamp: startTs,
     endTimestamp: endTs,
     sourceLevel: sourceLevel,
     artifactCount: artifacts.length
   });
-  
-  saveStore(agentId, store);
+
   logTelemetry(agentId, {
     eventType: createdArtifact ? 'artifact_processed' : 'artifact_duplicate',
     requestId,

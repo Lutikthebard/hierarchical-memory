@@ -36,6 +36,7 @@
       fullSummarizeInProgress: false,
       fullSummarizeMessage: '',
       learnContextInProgress: false,
+      learnContextStopInProgress: false,
       learnContextMessage: '',
       learnContextResult: null,
       exportContextInProgress: false,
@@ -58,15 +59,7 @@
         fromBlock: '',
         toBlock: '',
         learningIntent: '',
-        l1ArtifactPrompt: '',
-        aggregatePrompt: '',
-        aggregatePromptsByLevelText: '',
-        thresholdL1: '',
-        thresholdDefault: '',
-        thresholdByLevelText: '',
-        runFullSummarize: true,
-        maxTargetLevel: '',
-        aggregateBatch: ''
+        l1ArtifactPrompt: ''
       },
       memoryClearInProgress: false,
       memoryClearMessage: '',
@@ -126,13 +119,7 @@
           fromBlock: null,
           toBlock: null,
           learningIntent: '',
-          l1ArtifactPrompt: '',
-          aggregatePrompt: '',
-          aggregatePromptsByLevel: {},
-          runFullSummarize: true,
-          maxTargetLevel: 8,
-          aggregateBatch: null,
-          thresholds: {}
+          l1ArtifactPrompt: ''
         }
       }
     };

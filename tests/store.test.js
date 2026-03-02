@@ -16,6 +16,7 @@ const {
   checkThreshold,
   saveStore,
   loadStore,
+  updateStore,
   getArtifactsRootDir,
   getArtifactsIndexPath
 } = require('../scripts/store');
@@ -361,6 +362,59 @@ describe('store.js', () => {
       assert.equal(typeof loaded.artifacts[2][0].artifactId, 'string');
       assert.equal(loaded.artifacts[1][0].content, 'Shared artifact');
       assert.equal(loaded.artifacts[2][0].content, 'Legacy L2');
+    });
+  });
+
+  describe('updateStore', () => {
+    const originalDataDir = process.env.HM_DATA_DIR;
+    let tmpDir;
+    const agentId = 'store-update-test';
+
+    beforeEach(() => {
+      tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hm-store-update-test-'));
+      process.env.HM_DATA_DIR = tmpDir;
+      saveStore(agentId, createEmptyStore());
+    });
+
+    afterEach(() => {
+      if (originalDataDir === undefined) {
+        delete process.env.HM_DATA_DIR;
+      } else {
+        process.env.HM_DATA_DIR = originalDataDir;
+      }
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    it('serializes concurrent mutations for the same agent', async () => {
+      const first = updateStore(agentId, async (state) => {
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        addMessage(state, {
+          role: 'user',
+          content: 'first',
+          timestamp: '2026-03-02T10:00:00.000Z',
+          messageClass: 'dialogue'
+        });
+      });
+
+      const second = updateStore(agentId, (state) => {
+        addMessage(state, {
+          role: 'assistant',
+          content: 'second',
+          timestamp: '2026-03-02T10:00:01.000Z',
+          messageClass: 'dialogue'
+        });
+        addArtifact(state, 1, {
+          content: 'L1 summary',
+          startTimestamp: '2026-03-02T10:00:00.000Z',
+          endTimestamp: '2026-03-02T10:00:01.000Z'
+        });
+      });
+
+      await Promise.all([first, second]);
+
+      const finalStore = loadStore(agentId);
+      assert.equal(finalStore.messages.length, 2);
+      assert.equal((finalStore.artifacts[1] || []).length, 1);
     });
   });
 

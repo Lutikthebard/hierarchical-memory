@@ -317,24 +317,29 @@ describe('dashboard/api localhost smoke', () => {
           fromBlock: 2,
           toBlock: 4,
           learningIntent: 'Extract durable memory facts.',
-          l1ArtifactPrompt: 'Keep concise bullet structure.',
-          runFullSummarize: true,
-          maxTargetLevel: 4,
-          aggregateBatch: 2,
-          thresholds: { L2: 2, default: 2 },
-          aggregatePromptsByLevel: { '1': 'Custom L1->L2 aggregate prompt' }
+          l1ArtifactPrompt: 'Keep concise bullet structure.'
         })
       });
       const learnContextPayload = await learnContextRes.json();
       assert.equal(learnContextRes.ok, true, JSON.stringify(learnContextPayload));
       assert.equal(learnContextPayload.success, true);
       assert.equal(learnContextPayload.run.blocks.selected, 3);
-      assert.equal(learnContextPayload.run.l1.attempted, 3);
-      assert.equal(Array.isArray(learnContextPayload.run.fullSummarize.run?.passes), true);
+      assert.equal(learnContextPayload.run.sentToSession, 0);
+      assert.equal(learnContextPayload.run.skippedInMockMode, true);
+
+      const stopLearnRes = await fetch(`http://127.0.0.1:${PORT}/api/agents/${AGENT_ID}/memory/learn-context/stop`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
+      });
+      const stopLearnPayload = await stopLearnRes.json();
+      assert.equal(stopLearnRes.ok, true);
+      assert.equal(stopLearnPayload.success, true);
+      assert.equal(stopLearnPayload.running, false);
 
       const storeAfterLearnRes = await fetch(`http://127.0.0.1:${PORT}/api/agents/${AGENT_ID}/store`);
       const storeAfterLearnPayload = await storeAfterLearnRes.json();
-      assert.equal(storeAfterLearnPayload.artifacts.L1.length >= 2, true);
+      assert.equal(storeAfterLearnPayload.artifacts.L1.length, 1);
 
       const inject404Res = await fetch(`http://127.0.0.1:${PORT}/api/agents/missing-agent/context/inject`, {
         method: 'POST',
@@ -368,6 +373,13 @@ describe('dashboard/api localhost smoke', () => {
         body: JSON.stringify({ text: 'x y z', wordsPerBlock: 2 })
       });
       assert.equal(learnContext404Res.status, 404);
+
+      const stopLearn404Res = await fetch(`http://127.0.0.1:${PORT}/api/agents/missing-agent/memory/learn-context/stop`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
+      });
+      assert.equal(stopLearn404Res.status, 404);
 
       const exportContext404Res = await fetch(`http://127.0.0.1:${PORT}/api/agents/missing-agent/memory/export-context`, {
         method: 'POST',
@@ -443,7 +455,6 @@ describe('dashboard/api localhost smoke', () => {
       assert.equal(getConfigPayload.prompts.aggregateBySourceLevel.L1, 'Aggregate L1 custom');
       assert.equal(getConfigPayload.learnContext.wordsPerBlock, 120);
       assert.equal(getConfigPayload.learnContext.learningIntent, 'Default learning intent');
-      assert.equal(getConfigPayload.learnContext.aggregatePromptsByLevel.L1, 'L1->L2 learn prompt');
 
       const rollbackPreviewRes = await fetch(`http://127.0.0.1:${PORT}/api/agents/${AGENT_ID}/memory/rollback/preview`, {
         method: 'POST',
@@ -453,6 +464,7 @@ describe('dashboard/api localhost smoke', () => {
       const rollbackPreviewPayload = await rollbackPreviewRes.json();
       assert.equal(rollbackPreviewRes.ok, true);
       assert.equal(rollbackPreviewPayload.success, true);
+      // In mock mode, learn-context skips session sends and does not modify store.
       assert.equal(rollbackPreviewPayload.preview.removed.totalMessages, 2);
 
       const rollbackApplyRes = await fetch(`http://127.0.0.1:${PORT}/api/agents/${AGENT_ID}/memory/rollback`, {

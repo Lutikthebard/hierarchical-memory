@@ -164,12 +164,6 @@
               toBlock: null,
               learningIntent: '',
               l1ArtifactPrompt: '',
-              aggregatePrompt: '',
-              aggregatePromptsByLevel: {},
-              runFullSummarize: true,
-              maxTargetLevel: 8,
-              aggregateBatch: null,
-              thresholds: {},
               ...(data.learnContext || {})
             }
           };

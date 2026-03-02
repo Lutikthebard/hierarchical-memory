@@ -70,23 +70,37 @@ function buildInjectedContextMessage(reason, contextContent, autoInject = {}, op
   return [...preParts, mainBody, ...postParts].filter(Boolean).join('\n\n');
 }
 
-async function sendChatMessage({ sessionKey, message, gatewayUrl = DEFAULT_GATEWAY_URL, sendFn = null }) {
+async function sendChatMessage({
+  sessionKey,
+  message,
+  gatewayUrl = DEFAULT_GATEWAY_URL,
+  sendFn = null,
+  waitForRun = false,
+  timeoutMs = 30000
+}) {
   if (typeof sendFn === 'function') {
-    await sendFn({ sessionKey, message, gatewayUrl });
-    return { success: true };
+    const result = await sendFn({ sessionKey, message, gatewayUrl, waitForRun, timeoutMs });
+    return { success: true, runId: result?.runId || null };
   }
 
   const crypto = require('crypto');
   const client = new OpenClawClient(gatewayUrl);
   try {
     await client.connect();
-    await client.rpc('chat.send', {
+    const sendRes = await client.rpc('chat.send', {
       sessionKey,
       message,
       idempotencyKey: crypto.randomUUID(),
-      timeoutMs: 30000
+      timeoutMs
     });
-    return { success: true };
+    const runId = sendRes?.runId || null;
+    if (waitForRun && runId) {
+      await client.rpc('agent.wait', {
+        runId,
+        timeoutMs
+      }, timeoutMs + 30000);
+    }
+    return { success: true, runId };
   } finally {
     await client.close();
   }

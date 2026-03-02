@@ -1,13 +1,5 @@
-const store = require('./store');
-const triggerApi = require('./trigger-ws');
-const { createFullSummarizationService } = require('./full-summarization-service');
+const { sendChatMessage } = require('./context-actions');
 const { toPositiveInt } = require('./summarization-thresholds');
-const {
-  normalizeThresholdOverrides,
-  normalizePromptMap,
-  mergeAgentConfigWithRuntime,
-  composeLearnL1Prompt
-} = require('./summarization-runtime-overrides');
 
 function splitTextIntoWordBlocks(text, wordsPerBlock) {
   const rawWords = String(text || '')
@@ -50,13 +42,41 @@ function sliceBlocks(blocks, fromBlock, toBlock) {
   return blocks.filter((block) => block.blockIndex >= from && block.blockIndex <= to);
 }
 
+function buildLearnChunkMessage(block, totalBlocks, learningIntent, l1ArtifactPrompt) {
+  const intent = String(learningIntent || '').trim();
+  const extra = String(l1ArtifactPrompt || '').trim();
+
+  const parts = [
+    'LEARN CONTEXT BLOCK',
+    `Block ${block.blockIndex}/${totalBlocks} (words ${block.startWord}-${block.endWord}).`,
+    'Task: ingest this source text as durable working knowledge for future tasks.'
+  ];
+
+  if (intent) {
+    parts.push(`Learning intent:\n${intent}`);
+  }
+  if (extra) {
+    parts.push(`Focus guidance:\n${extra}`);
+  }
+
+  parts.push(`Source text:\n${block.text}`);
+  parts.push('A detailed reply is optional.');
+
+  return parts.filter(Boolean).join('\n\n');
+}
+
 function createLearnContextService(deps = {}) {
   const runtime = {
-    loadAgentConfig: deps.loadAgentConfig || store.loadAgentConfig,
-    handleL1FromMessages: deps.handleL1FromMessages || triggerApi.handleL1FromMessages,
-    runFullSummarization: deps.runFullSummarization || createFullSummarizationService().runFullSummarization,
-    logger: deps.logger || console
+    sendChatMessage: deps.sendChatMessage || sendChatMessage
   };
+
+  function buildCancelledError(sentToSession, totalChunks) {
+    const err = new Error('Learn Context run cancelled');
+    err.code = 'LEARN_CONTEXT_CANCELLED';
+    err.sentToSession = sentToSession;
+    err.totalChunks = totalChunks;
+    return err;
+  }
 
   async function runLearnContext({
     agentId,
@@ -67,12 +87,8 @@ function createLearnContextService(deps = {}) {
     toBlock,
     learningIntent,
     l1ArtifactPrompt,
-    thresholds,
-    aggregatePrompt,
-    aggregatePromptsByLevel,
-    runFullSummarize,
-    maxTargetLevel,
-    aggregateBatch
+    sendToSession,
+    shouldCancel
   } = {}) {
     if (!agentId) {
       throw new Error('agentId is required');
@@ -91,64 +107,28 @@ function createLearnContextService(deps = {}) {
       throw new Error('no blocks selected');
     }
 
-    const baseAgentConfig = runtime.loadAgentConfig(agentId);
-    const thresholdOverrides = normalizeThresholdOverrides(thresholds || {});
-    const runtimeConfigOverrides = {
-      thresholds: thresholdOverrides,
-      prompts: {}
-    };
-    if (typeof aggregatePrompt === 'string' && aggregatePrompt.trim()) {
-      runtimeConfigOverrides.prompts.aggregate = aggregatePrompt.trim();
-    }
-    const runtimeAgentConfig = mergeAgentConfigWithRuntime(baseAgentConfig, runtimeConfigOverrides);
-    const aggregatePromptMap = normalizePromptMap(aggregatePromptsByLevel || {});
-    const l1PromptOverride = composeLearnL1Prompt(
-      runtimeAgentConfig?.prompts?.l1 || '',
-      learningIntent,
-      l1ArtifactPrompt
-    );
+    const isMockMode = String(process.env.HM_LLM_MODE || '').trim().toLowerCase() === 'mock';
+    const shouldSendToSession = sendToSession === true
+      ? true
+      : (sendToSession !== false && !isMockMode);
 
-    const createdL1Artifacts = [];
-    const startedAt = Date.now();
+    const chunkMessages = selectedBlocks.map((block) => ({
+      block,
+      message: buildLearnChunkMessage(block, selectedBlocks.length, learningIntent, l1ArtifactPrompt)
+    }));
 
-    for (let idx = 0; idx < selectedBlocks.length; idx += 1) {
-      const block = selectedBlocks[idx];
-      const timestamp = new Date(startedAt + idx * 1000).toISOString();
-      const created = await runtime.handleL1FromMessages(agentId, sessionKey, [
-        {
-          role: 'user',
-          content: block.text,
-          timestamp
-        }
-      ], {
-        thresholdOverride: 1,
-        agentConfigOverride: runtimeAgentConfig,
-        l1PromptOverride
-      });
+    let sentToSession = 0;
 
-      if (created) {
-        createdL1Artifacts.push({
-          blockIndex: block.blockIndex,
-          artifactId: created.artifactId || null
-        });
+    for (const item of chunkMessages) {
+      if (!shouldSendToSession) break;
+      if (typeof shouldCancel === 'function' && shouldCancel()) {
+        throw buildCancelledError(sentToSession, chunkMessages.length);
       }
-    }
-
-    const shouldRunFull = runFullSummarize !== false;
-    let fullRun = null;
-    if (shouldRunFull) {
-      const parsedMaxTarget = toPositiveInt(maxTargetLevel) || 8;
-      const parsedAggregateBatch = toPositiveInt(aggregateBatch);
-
-      fullRun = await runtime.runFullSummarization({
-        agentId,
+      await runtime.sendChatMessage({
         sessionKey,
-        startSourceLevel: 1,
-        maxTargetLevel: parsedMaxTarget,
-        aggregateBatch: parsedAggregateBatch || undefined,
-        runtimeConfigOverrides,
-        aggregatePromptBySourceLevel: aggregatePromptMap
+        message: item.message
       });
+      sentToSession += 1;
     }
 
     return {
@@ -160,15 +140,8 @@ function createLearnContextService(deps = {}) {
         to: selectedBlocks[selectedBlocks.length - 1]?.blockIndex || null,
         wordsPerBlock: toPositiveInt(wordsPerBlock) || 180
       },
-      l1: {
-        created: createdL1Artifacts.length,
-        attempted: selectedBlocks.length,
-        artifacts: createdL1Artifacts
-      },
-      fullSummarize: {
-        enabled: shouldRunFull,
-        run: fullRun
-      },
+      sentToSession,
+      skippedInMockMode: !shouldSendToSession && isMockMode,
       completedAt: new Date().toISOString()
     };
   }

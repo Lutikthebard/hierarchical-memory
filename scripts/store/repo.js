@@ -14,6 +14,20 @@ function createRepoApi({
   loadLongTermArtifacts,
   writeLongTermArtifacts
 }) {
+  const agentUpdateQueues = new Map();
+
+  function enqueueStoreUpdate(agentId, task) {
+    const tail = agentUpdateQueues.get(agentId) || Promise.resolve();
+    const run = tail.then(() => task());
+    const nextTail = run.catch(() => {});
+    agentUpdateQueues.set(agentId, nextTail);
+    return run.finally(() => {
+      if (agentUpdateQueues.get(agentId) === nextTail) {
+        agentUpdateQueues.delete(agentId);
+      }
+    });
+  }
+
   function loadStore(agentId) {
     const storePath = getStorePath(agentId);
     let store = createEmptyStore();
@@ -55,10 +69,30 @@ function createRepoApi({
     store.artifacts = normalizedStore.artifacts;
   }
 
+  function updateStore(agentId, mutator) {
+    if (!agentId) {
+      throw new Error('agentId is required');
+    }
+    if (typeof mutator !== 'function') {
+      throw new Error('mutator must be a function');
+    }
+
+    return enqueueStoreUpdate(agentId, async () => {
+      const currentStore = loadStore(agentId);
+      const result = await mutator(currentStore);
+      saveStore(agentId, currentStore);
+      return {
+        store: currentStore,
+        result
+      };
+    });
+  }
+
   return {
     createEmptyStore,
     loadStore,
-    saveStore
+    saveStore,
+    updateStore
   };
 }
 

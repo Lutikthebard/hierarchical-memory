@@ -3,10 +3,13 @@
     {
       "id": "main",
       "name": "main",
-      "enabled": true,
+      "enabled": false,
       "isSubagent": false,
       "filters": {
-        "countRoles": ["user", "assistant"],
+        "countRoles": [
+          "user",
+          "assistant"
+        ],
         "exclude": [
           "HEARTBEAT_OK",
           "NO_REPLY",
@@ -25,8 +28,16 @@
       "enabled": true,
       "isSubagent": true,
       "filters": {
-        "countRoles": ["user", "assistant"],
-        "exclude": ["HEARTBEAT_OK", "NO_REPLY", "MEMORY TASK:", "ANNOUNCE_SKIP"]
+        "countRoles": [
+          "user",
+          "assistant"
+        ],
+        "exclude": [
+          "HEARTBEAT_OK",
+          "NO_REPLY",
+          "MEMORY TASK:",
+          "ANNOUNCE_SKIP"
+        ]
       }
     },
     {
@@ -35,8 +46,16 @@
       "enabled": true,
       "isSubagent": false,
       "filters": {
-        "countRoles": ["user", "assistant"],
-        "exclude": ["HEARTBEAT_OK", "NO_REPLY", "MEMORY TASK:", "ANNOUNCE_SKIP"]
+        "countRoles": [
+          "user",
+          "assistant"
+        ],
+        "exclude": [
+          "HEARTBEAT_OK",
+          "NO_REPLY",
+          "MEMORY TASK:",
+          "ANNOUNCE_SKIP"
+        ]
       }
     },
     {
@@ -45,9 +64,95 @@
       "enabled": true,
       "isSubagent": false,
       "filters": {
-        "countRoles": ["user", "assistant"],
-        "exclude": ["HEARTBEAT_OK", "NO_REPLY", "MEMORY TASK:", "ANNOUNCE_SKIP"]
+        "countRoles": [
+          "user",
+          "assistant"
+        ],
+        "exclude": [
+          "HEARTBEAT_OK",
+          "NO_REPLY",
+          "MEMORY TASK:",
+          "ANNOUNCE_SKIP"
+        ]
       }
+    },
+    {
+      "id": "hm-real-e2e-learn-export-agent",
+      "name": "hm-real-e2e-learn-export-agent",
+      "enabled": false,
+      "isSubagent": false
+    },
+    {
+      "id": "hm-real-learn-20260302-171045",
+      "name": "hm-real-learn-20260302-171045",
+      "enabled": true,
+      "isSubagent": false
+    },
+    {
+      "id": "hm-real-learn-20260302-171921",
+      "name": "hm-real-learn-20260302-171921",
+      "enabled": false,
+      "isSubagent": false
+    },
+    {
+      "id": "hm-real-learn-20260302-172200",
+      "name": "hm-real-learn-20260302-172200",
+      "enabled": false,
+      "isSubagent": false
+    },
+    {
+      "id": "hm-real-learn-20260302-172230",
+      "name": "hm-real-learn-20260302-172230",
+      "enabled": false,
+      "isSubagent": false
+    },
+    {
+      "id": "hm-real-learn-20260302-172333",
+      "name": "hm-real-learn-20260302-172333",
+      "enabled": false,
+      "isSubagent": false
+    },
+    {
+      "id": "hm-real-learn-20260302-173553",
+      "name": "hm-real-learn-20260302-173553",
+      "enabled": false,
+      "isSubagent": false
+    },
+    {
+      "id": "hm-real-learn-provision-test",
+      "name": "hm-real-learn-provision-test",
+      "enabled": false,
+      "isSubagent": false
+    },
+    {
+      "id": "hm-real-learn-provision-test-2",
+      "name": "hm-real-learn-provision-test-2",
+      "enabled": false,
+      "isSubagent": false
+    },
+    {
+      "id": "hm-real-learn-20260302-174957",
+      "name": "hm-real-learn-20260302-174957",
+      "enabled": true,
+      "isSubagent": false
+    },
+    {
+      "id": "hm-real-learn-20260302-182954",
+      "name": "hm-real-learn-20260302-182954",
+      "enabled": false,
+      "isSubagent": false
+    },
+    {
+      "id": "hm-real-learn-20260302-191100",
+      "name": "hm-real-learn-20260302-191100",
+      "enabled": false,
+      "isSubagent": false
+    },
+    {
+      "id": "hm-real-learn-20260302-200902",
+      "name": "hm-real-learn-20260302-200902",
+      "enabled": false,
+      "isSubagent": false
     }
   ]
 }

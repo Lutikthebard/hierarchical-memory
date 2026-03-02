@@ -21,27 +21,14 @@ describe('learn-context service', () => {
     assert.equal(range[1].blockIndex, 3);
   });
 
-  it('runs L1 ingestion and optional full summarization with runtime overrides', async () => {
-    const l1Calls = [];
-    const fullCalls = [];
+  it('sends selected blocks sequentially as learn chunk messages', async () => {
+    const sendCalls = [];
 
     const svc = createLearnContextService({
-      loadAgentConfig: () => ({
-        thresholds: { L1: 60, default: 5 },
-        prompts: {
-          l1: 'BASE L1 PROMPT',
-          aggregate: 'BASE AGGREGATE {level}'
-        }
-      }),
-      handleL1FromMessages: async (_agentId, _sessionKey, messages, options = {}) => {
-        l1Calls.push({ messages, options });
-        return { artifactId: `a-${l1Calls.length}` };
-      },
-      runFullSummarization: async (options = {}) => {
-        fullCalls.push(options);
-        return { passes: [{ sourceLevel: 1, targetLevel: 2 }] };
-      },
-      logger: { log: () => {} }
+      sendChatMessage: async ({ message }) => {
+        sendCalls.push({ message });
+        return { success: true, runId: `run-${sendCalls.length}` };
+      }
     });
 
     const run = await svc.runLearnContext({
@@ -53,29 +40,49 @@ describe('learn-context service', () => {
       toBlock: 3,
       learningIntent: 'Extract durable product knowledge.',
       l1ArtifactPrompt: 'Keep bullets concise.',
-      thresholds: { L2: 2, default: 3 },
-      aggregatePrompt: 'Aggregate prompt generic.',
-      aggregatePromptsByLevel: { '1': 'L1->L2 custom', '2': 'L2->L3 custom' },
-      runFullSummarize: true,
-      maxTargetLevel: 6,
-      aggregateBatch: 4
+      sendToSession: true
     });
 
     assert.equal(run.blocks.total, 4);
     assert.equal(run.blocks.selected, 2);
-    assert.equal(run.l1.created, 2);
-    assert.equal(l1Calls.length, 2);
-    assert.match(l1Calls[0].options.l1PromptOverride, /BASE L1 PROMPT/);
-    assert.match(l1Calls[0].options.l1PromptOverride, /Learning intent:/);
-    assert.equal(l1Calls[0].options.thresholdOverride, 1);
+    assert.equal(run.sentToSession, 2);
+    assert.equal(sendCalls.length, 2);
+    assert.match(sendCalls[0].message, /LEARN CONTEXT BLOCK/);
+    assert.match(sendCalls[0].message, /Extract durable product knowledge/);
+    assert.equal(run.skippedInMockMode, false);
+  });
 
-    assert.equal(fullCalls.length, 1);
-    assert.equal(fullCalls[0].startSourceLevel, 1);
-    assert.equal(fullCalls[0].maxTargetLevel, 6);
-    assert.equal(fullCalls[0].aggregateBatch, 4);
-    assert.equal(fullCalls[0].runtimeConfigOverrides.thresholds.L2, 2);
-    assert.equal(fullCalls[0].runtimeConfigOverrides.prompts.aggregate, 'Aggregate prompt generic.');
-    assert.equal(fullCalls[0].aggregatePromptBySourceLevel['1'], 'L1->L2 custom');
-    assert.equal(run.fullSummarize.enabled, true);
+  it('supports cancellation between chunks', async () => {
+    const sendCalls = [];
+    let cancelRequested = false;
+
+    const svc = createLearnContextService({
+      sendChatMessage: async ({ message }) => {
+        sendCalls.push({ message });
+        if (sendCalls.length === 1) {
+          cancelRequested = true;
+        }
+        return { success: true, runId: `run-${sendCalls.length}` };
+      }
+    });
+
+    await assert.rejects(
+      () => svc.runLearnContext({
+        agentId: 'main',
+        sessionKey: 'agent:main:main',
+        text: 'a b c d e f',
+        wordsPerBlock: 2,
+        learningIntent: 'intent',
+        l1ArtifactPrompt: 'prompt',
+        sendToSession: true,
+        shouldCancel: () => cancelRequested
+      }),
+      (err) => {
+        assert.equal(err.code, 'LEARN_CONTEXT_CANCELLED');
+        assert.equal(err.sentToSession, 1);
+        assert.equal(err.totalChunks, 3);
+        return true;
+      }
+    );
   });
 });

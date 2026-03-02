@@ -15,19 +15,7 @@
           fromBlock: toPositiveInt(defaults.fromBlock) || '',
           toBlock: toPositiveInt(defaults.toBlock) || '',
           learningIntent: String(defaults.learningIntent || ''),
-          l1ArtifactPrompt: String(defaults.l1ArtifactPrompt || ''),
-          aggregatePrompt: String(defaults.aggregatePrompt || ''),
-          aggregatePromptsByLevelText: H.formatKeyValueMap(defaults.aggregatePromptsByLevel || {}),
-          thresholdL1: toPositiveInt(defaults.thresholds?.L1) || '',
-          thresholdDefault: toPositiveInt(defaults.thresholds?.default) || '',
-          thresholdByLevelText: H.formatKeyValueMap(
-            Object.fromEntries(
-              Object.entries(defaults.thresholds || {}).filter(([key]) => /^L\d+$/i.test(String(key || '')))
-            )
-          ),
-          runFullSummarize: defaults.runFullSummarize !== false,
-          maxTargetLevel: toPositiveInt(defaults.maxTargetLevel) || '',
-          aggregateBatch: toPositiveInt(defaults.aggregateBatch) || ''
+          l1ArtifactPrompt: String(defaults.l1ArtifactPrompt || '')
         };
       },
 
@@ -53,34 +41,13 @@
       },
 
       buildLearnContextPayload() {
-        const thresholds = {};
-        const l1 = toPositiveInt(this.learnContextForm.thresholdL1);
-        const def = toPositiveInt(this.learnContextForm.thresholdDefault);
-        if (l1) thresholds.L1 = l1;
-        if (def) thresholds.default = def;
-
-        const thresholdLines = H.parseKeyValueMap(this.learnContextForm.thresholdByLevelText);
-        for (const [key, value] of Object.entries(thresholdLines)) {
-          const parsed = toPositiveInt(value);
-          if (!parsed) continue;
-          const trimmed = String(key || '').trim();
-          if (!/^L\d+$/i.test(trimmed)) continue;
-          thresholds[trimmed.toUpperCase()] = parsed;
-        }
-
         return {
           text: String(this.learnContextForm.fileText || ''),
           wordsPerBlock: toPositiveInt(this.learnContextForm.wordsPerBlock) || 180,
           fromBlock: toPositiveInt(this.learnContextForm.fromBlock) || undefined,
           toBlock: toPositiveInt(this.learnContextForm.toBlock) || undefined,
           learningIntent: String(this.learnContextForm.learningIntent || ''),
-          l1ArtifactPrompt: String(this.learnContextForm.l1ArtifactPrompt || ''),
-          aggregatePrompt: String(this.learnContextForm.aggregatePrompt || ''),
-          aggregatePromptsByLevel: H.parseKeyValueMap(this.learnContextForm.aggregatePromptsByLevelText),
-          thresholds,
-          runFullSummarize: this.learnContextForm.runFullSummarize !== false,
-          maxTargetLevel: toPositiveInt(this.learnContextForm.maxTargetLevel) || undefined,
-          aggregateBatch: toPositiveInt(this.learnContextForm.aggregateBatch) || undefined
+          l1ArtifactPrompt: String(this.learnContextForm.l1ArtifactPrompt || '')
         };
       },
 
@@ -103,13 +70,18 @@
           });
           const data = await response.json();
           if (!response.ok || !data.success) {
+            if (response.status === 409 && data.cancelled) {
+              this.learnContextMessage = `Learn Context cancelled (${data.run?.sentToSession || 0}/${data.run?.totalChunks || 0} chunks sent)`;
+              this.learnContextResult = data.run || null;
+              return;
+            }
             throw new Error(data.error || `HTTP ${response.status}`);
           }
 
           this.learnContextResult = data.run || null;
-          const l1Created = data.run?.l1?.created || 0;
           const blockSelected = data.run?.blocks?.selected || 0;
-          this.learnContextMessage = `Learn Context completed: ${l1Created}/${blockSelected} L1 artifacts`;
+          const sent = data.run?.sentToSession || 0;
+          this.learnContextMessage = `Learn Context completed: sent ${sent}/${blockSelected} chunks`;
           this.activeTab = 'context';
           await Promise.all([
             this.loadAgentData(),
@@ -127,6 +99,30 @@
         }
       },
 
+      async stopLearnContextRun() {
+        if (!this.selectedAgent || !this.learnContextInProgress || this.learnContextStopInProgress) return;
+        this.learnContextStopInProgress = true;
+        try {
+          const response = await fetch(`/api/agents/${this.selectedAgent}/memory/learn-context/stop`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({})
+          });
+          const data = await response.json();
+          if (!response.ok || !data.success) {
+            throw new Error(data.error || `HTTP ${response.status}`);
+          }
+          this.learnContextMessage = data.running
+            ? 'Stop requested for current Learn Context run'
+            : 'No active Learn Context run';
+        } catch (e) {
+          console.error('Stop Learn Context failed:', e);
+          this.learnContextMessage = `Stop failed: ${e.message}`;
+        } finally {
+          this.learnContextStopInProgress = false;
+        }
+      },
+
       async saveLearnContextDefaults() {
         if (!this.selectedAgent) return;
 
@@ -137,13 +133,7 @@
             fromBlock: payload.fromBlock || null,
             toBlock: payload.toBlock || null,
             learningIntent: payload.learningIntent,
-            l1ArtifactPrompt: payload.l1ArtifactPrompt,
-            aggregatePrompt: payload.aggregatePrompt,
-            aggregatePromptsByLevel: payload.aggregatePromptsByLevel,
-            runFullSummarize: payload.runFullSummarize,
-            maxTargetLevel: payload.maxTargetLevel || null,
-            aggregateBatch: payload.aggregateBatch || null,
-            thresholds: payload.thresholds
+            l1ArtifactPrompt: payload.l1ArtifactPrompt
           };
 
           const response = await fetch(`/api/agents/${this.selectedAgent}/config`, {

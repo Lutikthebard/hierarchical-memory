@@ -44,6 +44,7 @@ const statsApi = createStatsApi({
 module.exports = {
   loadStore: repoApi.loadStore,
   saveStore: repoApi.saveStore,
+  updateStore: repoApi.updateStore,
   addMessage,
   addArtifact: artifactsApi.addArtifact,
   getUnsummarized: statsApi.getUnsummarized,

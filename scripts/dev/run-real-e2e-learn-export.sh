@@ -2,4 +2,4 @@
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
-exec node "$ROOT_DIR/scripts/dev/real-e2e-learn-export.js" "$@"
+exec bash "$ROOT_DIR/run-real-e2e-learn-export.sh" "$@"

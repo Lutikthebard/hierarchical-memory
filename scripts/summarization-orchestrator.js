@@ -12,10 +12,9 @@ function createSummarizationOrchestrator(deps) {
     resolveSessionKey,
     loadStore,
     saveStore,
+    updateStore,
     loadAgentConfig,
     archiveMessages,
-    removeSummarizedMessages,
-    getLastSummarizedTimestamp,
     checkThreshold,
     getThresholdForLevel,
     formatTimestamp,
@@ -40,8 +39,9 @@ function createSummarizationOrchestrator(deps) {
       }
 
       const sessionKey = resolveSessionKey(agentId);
+      let l1Result = null;
       if (sourceLevel === 0) {
-        await triggerApi.handleL1(agentId, sessionKey);
+        l1Result = await triggerApi.handleL1(agentId, sessionKey);
       } else {
         await triggerApi.handleAggregate(agentId, sessionKey, sourceLevel);
       }
@@ -67,17 +67,19 @@ function createSummarizationOrchestrator(deps) {
       console.log('\n✅ Automatic summarization completed successfully!\n');
       console.log('🔄 Reloading store to pick up new artifacts...');
 
-      const updatedStore = loadStore(agentId);
+      let updatedStore = loadStore(agentId);
       console.log(`   Artifacts now: L1=${(updatedStore.artifacts[1] || []).length}`);
 
       if (sourceLevel === 0) {
-        archiveSummarizedL0Messages(agentId, updatedStore, {
-          getLastSummarizedTimestamp,
+        await archiveSummarizedL0Messages(agentId, updatedStore, {
           archiveMessages,
-          removeSummarizedMessages,
           saveStore,
+          loadStore,
+          updateStore,
+          summarizedMessageTimestamps: l1Result?.summarizedMessageTimestamps || [],
           logger: console
         });
+        updatedStore = loadStore(agentId);
       }
 
       const targetLevel = sourceLevel + 1;

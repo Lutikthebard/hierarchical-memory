@@ -35,10 +35,9 @@ function createFullSummarizationService(deps = {}) {
     getUnsummarized: deps.getUnsummarized || store.getUnsummarized,
     filterForCounting: deps.filterForCounting || store.filterForCounting,
     getThresholdForLevel: deps.getThresholdForLevel || store.getThresholdForLevel,
-    getLastSummarizedTimestamp: deps.getLastSummarizedTimestamp || store.getLastSummarizedTimestamp,
     archiveMessages: deps.archiveMessages || store.archiveMessages,
-    removeSummarizedMessages: deps.removeSummarizedMessages || store.removeSummarizedMessages,
     saveStore: deps.saveStore || store.saveStore,
+    updateStore: deps.updateStore || store.updateStore,
     handleL1: deps.handleL1 || triggerApi.handleL1,
     handleAggregate: deps.handleAggregate || triggerApi.handleAggregate,
     logger: deps.logger || console
@@ -112,17 +111,18 @@ function createFullSummarizationService(deps = {}) {
         const thresholdOverride = Math.max(1, Math.min(targetBatch, available));
 
         if (sourceLevel === 0) {
-          await runtime.handleL1(agentId, sessionKey, {
+          const l1Result = await runtime.handleL1(agentId, sessionKey, {
             thresholdOverride,
             agentConfigOverride: agentConfig,
             l1PromptOverride: runtimeConfigOverrides?.prompts?.l1
           });
           const refreshedStore = runtime.loadStore(agentId);
-          archiveSummarizedL0Messages(agentId, refreshedStore, {
-            getLastSummarizedTimestamp: runtime.getLastSummarizedTimestamp,
+          await archiveSummarizedL0Messages(agentId, refreshedStore, {
             archiveMessages: runtime.archiveMessages,
-            removeSummarizedMessages: runtime.removeSummarizedMessages,
             saveStore: runtime.saveStore,
+            loadStore: runtime.loadStore,
+            updateStore: runtime.updateStore,
+            summarizedMessageTimestamps: l1Result?.summarizedMessageTimestamps || [],
             logger: runtime.logger
           });
         } else {

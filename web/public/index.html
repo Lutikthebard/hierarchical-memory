@@ -287,50 +287,17 @@
             <textarea x-model="learnContextForm.l1ArtifactPrompt" rows="3" class="w-full border rounded px-2 py-1 text-sm font-mono" placeholder="Extra L1-specific instructions"></textarea>
           </div>
 
-          <div>
-            <label class="text-xs text-gray-600 block mb-1">Aggregate prompt (all levels fallback)</label>
-            <textarea x-model="learnContextForm.aggregatePrompt" rows="3" class="w-full border rounded px-2 py-1 text-sm font-mono" placeholder="Optional override for aggregate prompt"></textarea>
-          </div>
-
-          <div>
-            <label class="text-xs text-gray-600 block mb-1">Aggregate prompts by source level (<code>L1: ...</code> per line)</label>
-            <textarea x-model="learnContextForm.aggregatePromptsByLevelText" rows="4" class="w-full border rounded px-2 py-1 text-sm font-mono" placeholder="L1: prompt for L1->L2&#10;L2: prompt for L2->L3"></textarea>
-          </div>
-
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div>
-              <label class="text-xs text-gray-600 block mb-1">Threshold override L1</label>
-              <input type="number" min="1" x-model.number="learnContextForm.thresholdL1" class="w-full border rounded px-2 py-1 text-sm">
-            </div>
-            <div>
-              <label class="text-xs text-gray-600 block mb-1">Threshold override default</label>
-              <input type="number" min="1" x-model.number="learnContextForm.thresholdDefault" class="w-full border rounded px-2 py-1 text-sm">
-            </div>
-          </div>
-
-          <div>
-            <label class="text-xs text-gray-600 block mb-1">Threshold overrides by level (<code>L2: 2</code> per line)</label>
-            <textarea x-model="learnContextForm.thresholdByLevelText" rows="3" class="w-full border rounded px-2 py-1 text-sm font-mono" placeholder="L2: 2&#10;L3: 3"></textarea>
-          </div>
-
-          <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
-            <label class="flex items-center gap-2 text-sm">
-              <input type="checkbox" x-model="learnContextForm.runFullSummarize" class="rounded">
-              <span>Run full summarize after L1</span>
-            </label>
-            <div>
-              <label class="text-xs text-gray-600 block mb-1">Max target level (optional)</label>
-              <input type="number" min="1" x-model.number="learnContextForm.maxTargetLevel" class="w-full border rounded px-2 py-1 text-sm">
-            </div>
-            <div>
-              <label class="text-xs text-gray-600 block mb-1">Aggregate batch (optional)</label>
-              <input type="number" min="1" x-model.number="learnContextForm.aggregateBatch" class="w-full border rounded px-2 py-1 text-sm">
-            </div>
-          </div>
-
           <div class="flex gap-2 justify-end">
             <button @click="fillLearnContextFormFromConfig()" class="px-4 py-2 text-sm border rounded hover:bg-gray-50">Reset to Agent Defaults</button>
             <button @click="saveLearnContextDefaults()" class="px-4 py-2 text-sm bg-indigo-600 text-white rounded hover:bg-indigo-700">Save Defaults</button>
+            <button
+              @click="stopLearnContextRun()"
+              x-show="learnContextInProgress"
+              :disabled="learnContextStopInProgress || !selectedAgent"
+              class="px-4 py-2 text-sm bg-rose-600 text-white rounded disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <span x-text="learnContextStopInProgress ? 'Stopping...' : 'Stop Learn Run'"></span>
+            </button>
             <button
               @click="runLearnContext()"
               :disabled="learnContextInProgress || !selectedAgent"
@@ -342,8 +309,7 @@
 
           <div x-show="learnContextResult" class="border rounded p-3 text-xs space-y-1" style="display: none;">
             <div><strong>Blocks:</strong> <span x-text="learnContextResult?.blocks?.selected || 0"></span> / <span x-text="learnContextResult?.blocks?.total || 0"></span></div>
-            <div><strong>L1 artifacts:</strong> <span x-text="learnContextResult?.l1?.created || 0"></span></div>
-            <div><strong>Full summarize passes:</strong> <span x-text="learnContextResult?.fullSummarize?.run?.passes?.length || 0"></span></div>
+            <div><strong>Chunks sent:</strong> <span x-text="learnContextResult?.sentToSession || 0"></span></div>
           </div>
         </div>
       </div>

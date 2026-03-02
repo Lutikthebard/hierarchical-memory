@@ -11,7 +11,9 @@ function createIngestRuntime(deps) {
     parseMessage,
     addMessage,
     formatTimestamp,
+    loadStore,
     saveStore,
+    updateStore,
     scheduleContextRegenerate,
     compactController,
     checkThreshold,
@@ -25,6 +27,41 @@ function createIngestRuntime(deps) {
     onRawLine,
     logger = console
   } = deps;
+
+  function mergeArtifacts(baseArtifacts, extraArtifacts) {
+    const merged = {};
+    const levels = new Set([
+      ...Object.keys(baseArtifacts || {}),
+      ...Object.keys(extraArtifacts || {})
+    ]);
+
+    for (const level of levels) {
+      const seen = new Set();
+      const out = [];
+      const append = (items) => {
+        if (!Array.isArray(items)) return;
+        for (const artifact of items) {
+          if (!artifact || typeof artifact !== 'object') continue;
+          const key = [
+            artifact.artifactId || '',
+            artifact.startTimestamp || '',
+            artifact.endTimestamp || '',
+            artifact.createdAt || '',
+            artifact.content || ''
+          ].join('|');
+          if (seen.has(key)) continue;
+          seen.add(key);
+          out.push(artifact);
+        }
+      };
+      append(baseArtifacts?.[level]);
+      append(extraArtifacts?.[level]);
+      if (out.length > 0) {
+        merged[level] = out;
+      }
+    }
+    return merged;
+  }
 
   async function processLine(agentId, storeRef, line, options = {}) {
     if (typeof onRawLine === 'function') {
@@ -44,7 +81,20 @@ function createIngestRuntime(deps) {
     const msg = parseMessage(line, agentConfig);
     if (!msg) return false;
 
-    const added = addMessage(storeRef.current, msg);
+    let added = null;
+    const useAtomicMessageCommit = !options.skipPersistence && typeof updateStore === 'function';
+    if (useAtomicMessageCommit) {
+      const committed = await updateStore(agentId, (latestStore) => {
+        const nextAdded = addMessage(latestStore, msg);
+        return { added: nextAdded || null };
+      });
+      added = committed?.result?.added || null;
+      if (!added) return false;
+      storeRef.current = committed.store;
+    } else {
+      added = addMessage(storeRef.current, msg);
+    }
+
     if (!added) return false;
 
     if (msg.shouldCount) {
@@ -57,7 +107,18 @@ function createIngestRuntime(deps) {
       logger.log(`[${ts}] ${msg.role.toUpperCase()}: ${preview}${msg.content.length > 50 ? '...' : ''}`);
     }
 
-    if (!options.skipPersistence) {
+    if (!options.skipPersistence && !useAtomicMessageCommit) {
+      if (typeof loadStore === 'function') {
+        try {
+          const latest = loadStore(agentId);
+          storeRef.current.artifacts = mergeArtifacts(
+            latest?.artifacts || {},
+            storeRef.current.artifacts || {}
+          );
+        } catch (err) {
+          logger.error('Failed to merge latest artifacts before save:', err?.message || err);
+        }
+      }
       saveStore(agentId, storeRef.current);
     }
 
