@@ -5,7 +5,7 @@ function createStreamLLMAdapter({
   gatewayUrl,
   gatewayToken,
   timeoutSeconds = 600,
-  artifactWaitMs = 60000,
+  artifactWaitMs = 360000,
   waitForArtifact,
   logger = console
 }) {

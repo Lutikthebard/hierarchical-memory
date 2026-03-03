@@ -66,7 +66,7 @@ const compactController = new CompactController();
 const artifactStreamRuntime = createArtifactStreamRuntime({ logger: console });
 
 const triggerTimeoutSeconds = parseInt(process.env.TRIGGER_TIMEOUT_SEC, 10) || 600;
-const artifactWaitMs = parseInt(process.env.TRIGGER_ARTIFACT_WAIT_MS, 10) || 60000;
+const artifactWaitMs = parseInt(process.env.TRIGGER_ARTIFACT_WAIT_MS, 10) || 360000;
 const llmMode = (process.env.HM_LLM_MODE || 'openclaw').toLowerCase();
 const useWatchStreamAdapter = llmMode !== 'mock';
 
