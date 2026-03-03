@@ -16,6 +16,8 @@ const {
  * Shared JSONL message parser for watchers and related services.
  */
 
+const UNTRUSTED_METADATA_BLOCK_RE = /(?:^|\n)?\s*\/?\s*(?:Conversation info|Sender)\s*\(untrusted metadata\):\s*\n```(?:json)?\s*\n[\s\S]*?\n```\s*/gi;
+
 function extractContent(content) {
   if (typeof content === 'string') {
     return content;
@@ -41,6 +43,12 @@ function extractContent(content) {
   }
 
   return '';
+}
+
+function sanitizeUntrustedMetadata(content) {
+  const text = normalizeText(content);
+  if (!text) return '';
+  return normalizeText(text.replace(UNTRUSTED_METADATA_BLOCK_RE, '\n'));
 }
 
 function extractSessionsSendToolCall(msg) {
@@ -144,7 +152,7 @@ function parseMessage(line, agentConfig = null) {
     const role = parsed.role;
     if (!filters.storeRoles.includes(role)) return null;
 
-    const content = normalizeText(parsed.content);
+    const content = sanitizeUntrustedMetadata(parsed.content);
     if (!content) return null;
 
     const messageClass = parsed.messageClass || classifyMessage(role, content);

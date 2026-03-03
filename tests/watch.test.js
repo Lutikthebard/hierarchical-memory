@@ -158,6 +158,60 @@ describe('watch.js', () => {
       assert.equal(msg.content, 'Public response\n<think>Private reasoning</think>');
     });
 
+    it('strips untrusted metadata blocks from message content', () => {
+      const line = JSON.stringify({
+        type: 'message',
+        message: {
+          role: 'user',
+          content: `Сделай краткое резюме диалога.
+
+/ Conversation info (untrusted metadata):
+\`\`\`json
+{
+  "message_id": "7465",
+  "sender_id": "1502736026"
+}
+\`\`\`
+
+Sender (untrusted metadata):
+\`\`\`json
+{
+  "label": "LutikTheBard (Евгений) (1502736026)"
+}
+\`\`\``,
+          timestamp: '2026-01-01T10:00:00Z'
+        }
+      });
+      const msg = parseMessage(line);
+      assert.ok(msg);
+      assert.equal(msg.content, 'Сделай краткое резюме диалога.');
+      assert.equal(msg.messageClass, 'dialogue');
+    });
+
+    it('drops message when only untrusted metadata blocks are present', () => {
+      const line = JSON.stringify({
+        type: 'message',
+        message: {
+          role: 'user',
+          content: `Conversation info (untrusted metadata):
+\`\`\`json
+{
+  "message_id": "7465"
+}
+\`\`\`
+
+Sender (untrusted metadata):
+\`\`\`json
+{
+  "id": "1502736026"
+}
+\`\`\``,
+          timestamp: '2026-01-01T10:00:00Z'
+        }
+      });
+      assert.equal(parseMessage(line), null);
+    });
+
     it('filters commands by class defaults', () => {
       const line = JSON.stringify({
         type: 'message',
