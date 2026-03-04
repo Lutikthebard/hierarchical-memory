@@ -147,4 +147,108 @@ describe('artifact stream runtime', () => {
     const result = await waiter.promise;
     assert.match(result, /<memory_artifact_L2>l2-second<\/memory_artifact_L2>/);
   });
+
+  it('waits for delivery ACK before accepting artifact response', async () => {
+    const runtime = createArtifactStreamRuntime();
+    const sourceMessage = 'Summarize 30 messages from: 2026-03-04 00:30:00 UTC → 2026-03-04 00:44:21 UTC.';
+    const waiter = runtime.waitForDeliveredArtifact({
+      agentId: 'a1',
+      sessionKey: 'agent:a1:main',
+      expectedLevel: 1,
+      sourceMessage,
+      startedAtMs: Date.parse('2026-03-04T00:44:39.000Z'),
+      deliveryTimeoutMs: 1000,
+      responseTimeoutMs: 1000
+    });
+
+    runtime.observeLine({
+      agentId: 'a1',
+      sessionKey: 'agent:a1:main',
+      line: makeMessageLine({
+        role: 'assistant',
+        content: '<memory_artifact_L1>too-early</memory_artifact_L1>',
+        timestamp: '2026-03-04T00:45:00.000Z',
+        sessionKey: 'agent:a1:main'
+      })
+    });
+
+    runtime.observeLine({
+      agentId: 'a1',
+      sessionKey: 'agent:a1:main',
+      line: makeMessageLine({
+        role: 'user',
+        content: sourceMessage,
+        timestamp: '2026-03-04T00:45:10.000Z',
+        sessionKey: 'agent:a1:main'
+      })
+    });
+
+    runtime.observeLine({
+      agentId: 'a1',
+      sessionKey: 'agent:a1:main',
+      line: makeMessageLine({
+        role: 'assistant',
+        content: '<memory_artifact_L1>accepted</memory_artifact_L1>\nNO_REPLY',
+        timestamp: '2026-03-04T00:45:11.000Z',
+        sessionKey: 'agent:a1:main'
+      })
+    });
+
+    const result = await waiter.promise;
+    assert.match(result, /accepted/);
+  });
+
+  it('matches queued wrapper delivery ACK and then resolves on artifact', async () => {
+    const runtime = createArtifactStreamRuntime();
+    const sourceMessage = 'Summarize 30 messages from: 2026-03-04 00:30:00 UTC → 2026-03-04 00:44:21 UTC.';
+    const waiter = runtime.waitForDeliveredArtifact({
+      agentId: 'a1',
+      sessionKey: 'agent:a1:main',
+      expectedLevel: 1,
+      sourceMessage,
+      startedAtMs: Date.parse('2026-03-04T00:44:39.000Z'),
+      deliveryTimeoutMs: 1000,
+      responseTimeoutMs: 1000
+    });
+
+    runtime.observeLine({
+      agentId: 'a1',
+      sessionKey: 'agent:a1:main',
+      line: makeMessageLine({
+        role: 'user',
+        content: `[Queued messages while agent was busy]\n\n---\nQueued #1\n${sourceMessage}\n\n---\nQueued #2\nSomething else`,
+        timestamp: '2026-03-04T01:05:36.000Z',
+        sessionKey: 'agent:a1:main'
+      })
+    });
+
+    runtime.observeLine({
+      agentId: 'a1',
+      sessionKey: 'agent:a1:main',
+      line: makeMessageLine({
+        role: 'assistant',
+        content: '<memory_artifact_L1>from-queue</memory_artifact_L1>\nNO_REPLY',
+        timestamp: '2026-03-04T01:05:51.000Z',
+        sessionKey: 'agent:a1:main'
+      })
+    });
+
+    const result = await waiter.promise;
+    assert.match(result, /from-queue/);
+  });
+
+  it('times out when delivery ACK is not observed', async () => {
+    const runtime = createArtifactStreamRuntime();
+    const waiter = runtime.waitForDeliveredArtifact({
+      agentId: 'a1',
+      sessionKey: 'agent:a1:main',
+      expectedLevel: 1,
+      sourceMessage: 'Summarize 30 messages from: 2026-03-04 00:30:00 UTC → 2026-03-04 00:44:21 UTC.',
+      startedAtMs: Date.parse('2026-03-04T00:44:39.000Z'),
+      deliveryTimeoutMs: 50,
+      responseTimeoutMs: 1000
+    });
+
+    await assert.rejects(waiter.promise, /artifact_delivery_timeout/);
+  });
 });

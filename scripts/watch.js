@@ -67,6 +67,7 @@ const artifactStreamRuntime = createArtifactStreamRuntime({ logger: console });
 
 const triggerTimeoutSeconds = parseInt(process.env.TRIGGER_TIMEOUT_SEC, 10) || 600;
 const artifactWaitMs = parseInt(process.env.TRIGGER_ARTIFACT_WAIT_MS, 10) || 360000;
+const deliveryWaitMs = parseInt(process.env.TRIGGER_DELIVERY_WAIT_MS, 10) || 1800000;
 const llmMode = (process.env.HM_LLM_MODE || 'openclaw').toLowerCase();
 const useWatchStreamAdapter = llmMode !== 'mock';
 
@@ -76,7 +77,9 @@ if (useWatchStreamAdapter) {
     gatewayToken: process.env.GATEWAY_TOKEN || '',
     timeoutSeconds: triggerTimeoutSeconds,
     artifactWaitMs,
+    deliveryWaitMs,
     waitForArtifact: artifactStreamRuntime.waitForArtifact,
+    waitForDeliveredArtifact: artifactStreamRuntime.waitForDeliveredArtifact,
     logger: console
   });
   triggerApi.setAdapter(streamingAdapter, 'watch-stream');

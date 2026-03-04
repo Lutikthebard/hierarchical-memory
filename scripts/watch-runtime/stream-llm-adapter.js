@@ -6,11 +6,13 @@ function createStreamLLMAdapter({
   gatewayToken,
   timeoutSeconds = 600,
   artifactWaitMs = 360000,
+  deliveryWaitMs = 1800000,
   waitForArtifact,
+  waitForDeliveredArtifact,
   logger = console
 }) {
-  if (typeof waitForArtifact !== 'function') {
-    throw new Error('waitForArtifact function is required for stream adapter');
+  if (typeof waitForArtifact !== 'function' && typeof waitForDeliveredArtifact !== 'function') {
+    throw new Error('waitForArtifact or waitForDeliveredArtifact function is required for stream adapter');
   }
 
   let client = null;
@@ -31,13 +33,23 @@ function createStreamLLMAdapter({
         : null;
       const timeoutMs = Math.max(1000, Number(timeoutSeconds) * 1000);
       const startedAtMs = Date.now();
-      const waiter = waitForArtifact({
-        agentId,
-        sessionKey,
-        expectedLevel,
-        startedAtMs,
-        timeoutMs: artifactWaitMs
-      });
+      const waiter = typeof waitForDeliveredArtifact === 'function'
+        ? waitForDeliveredArtifact({
+            agentId,
+            sessionKey,
+            expectedLevel,
+            sourceMessage: message,
+            startedAtMs,
+            deliveryTimeoutMs: deliveryWaitMs,
+            responseTimeoutMs: artifactWaitMs
+          })
+        : waitForArtifact({
+            agentId,
+            sessionKey,
+            expectedLevel,
+            startedAtMs,
+            timeoutMs: artifactWaitMs
+          });
       const waiterPromise = waiter.promise;
       waiterPromise.catch(() => {});
 
@@ -76,6 +88,11 @@ function createStreamLLMAdapter({
       } catch (error) {
         waiter.cancel();
         await waiterPromise.catch(() => {});
+        if (error && error.message === 'artifact_delivery_timeout') {
+          logger.log('[stream-llm-adapter] Timed out waiting for memory-task delivery ACK in stream');
+          lastCaptureInfo = { method: 'jsonl-delivery-timeout', collectedCount: 0 };
+          return '';
+        }
         if (error && error.message === 'artifact_wait_timeout') {
           logger.log('[stream-llm-adapter] Timed out waiting for artifact in stream');
           lastCaptureInfo = { method: 'jsonl-timeout', collectedCount: 0 };

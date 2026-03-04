@@ -80,7 +80,8 @@ npm run loadtest:offline
 - `GATEWAY_TOKEN` (optional) — gateway auth token.
 - `GATEWAY_PASSWORD` (optional) — gateway auth password (used when token is absent).
 - `TRIGGER_TIMEOUT_SEC` (default `300`) — trigger timeout for openclaw mode.
-- `TRIGGER_ARTIFACT_WAIT_MS` (default `360000`) — artifact wait window in watcher stream mode.
+- `TRIGGER_ARTIFACT_WAIT_MS` (default `360000`) — artifact response wait window after delivery ACK in watcher stream mode.
+- `TRIGGER_DELIVERY_WAIT_MS` (default `1800000`) — max wait for memory-task delivery ACK in session stream.
 
 Global `config.json`:
 - `thresholds.L1` / `thresholds.default`

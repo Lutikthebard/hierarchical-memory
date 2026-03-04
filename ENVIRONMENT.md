@@ -66,7 +66,8 @@ Service files:
 - `GATEWAY_TOKEN` (optional)
 - `GATEWAY_PASSWORD` (optional; fallback to `~/.openclaw/openclaw.json` if present)
 - `TRIGGER_TIMEOUT_SEC` (default `300`)
-- `TRIGGER_ARTIFACT_WAIT_MS` (default `360000`; watcher stream artifact wait window)
+- `TRIGGER_ARTIFACT_WAIT_MS` (default `360000`; artifact response wait window after delivery ACK)
+- `TRIGGER_DELIVERY_WAIT_MS` (default `1800000`; max wait for memory-task delivery ACK in session stream)
 
 ## Runtime Behavior Summary
 

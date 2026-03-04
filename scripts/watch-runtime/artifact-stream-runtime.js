@@ -1,4 +1,8 @@
-const { extractTextContent, hasArtifactTagForLevel } = require('../gateway/artifact-extract');
+const {
+  extractTextContent,
+  hasArtifactTagForLevel,
+  sourceTextMatchesCandidate
+} = require('../gateway/artifact-extract');
 
 function toTimestampMs(rawValue) {
   if (rawValue === undefined || rawValue === null) return null;
@@ -74,6 +78,82 @@ function createArtifactStreamRuntime({ logger = console } = {}) {
     };
   }
 
+  function waitForDeliveredArtifact({
+    agentId,
+    sessionKey = null,
+    expectedLevel = null,
+    sourceMessage,
+    startedAtMs = Date.now(),
+    deliveryTimeoutMs = 1800000,
+    responseTimeoutMs = 12000
+  }) {
+    const source = typeof sourceMessage === 'string' ? sourceMessage : '';
+    if (!source.trim()) {
+      throw new Error('sourceMessage is required for delivery-aware artifact wait');
+    }
+
+    const startedMs = Number.isFinite(startedAtMs) ? startedAtMs : Date.now();
+
+    let settled = false;
+    let resolvePromise;
+    let rejectPromise;
+
+    const waiter = {
+      mode: 'delivery_then_artifact',
+      agentId,
+      sessionKey,
+      expectedLevel,
+      sourceMessage: source,
+      startedAtMs: startedMs,
+      deliveryAckTsMs: null,
+      deliveryTimer: null,
+      responseTimer: null,
+      resolve(value) {
+        if (settled) return;
+        settled = true;
+        clearTimeout(waiter.deliveryTimer);
+        clearTimeout(waiter.responseTimer);
+        waiters.delete(waiter);
+        resolvePromise(value);
+      },
+      reject(error) {
+        if (settled) return;
+        settled = true;
+        clearTimeout(waiter.deliveryTimer);
+        clearTimeout(waiter.responseTimer);
+        waiters.delete(waiter);
+        rejectPromise(error);
+      },
+      ackDelivery(tsMs) {
+        if (settled || waiter.deliveryAckTsMs !== null) return;
+        waiter.deliveryAckTsMs = tsMs;
+        clearTimeout(waiter.deliveryTimer);
+        waiter.responseTimer = setTimeout(() => {
+          waiter.reject(new Error('artifact_wait_timeout'));
+        }, responseTimeoutMs);
+        logger.log('[artifact-stream-runtime] Delivery ACK captured, waiting for artifact response');
+      }
+    };
+
+    const promise = new Promise((resolve, reject) => {
+      resolvePromise = resolve;
+      rejectPromise = reject;
+    });
+
+    waiter.deliveryTimer = setTimeout(() => {
+      waiter.reject(new Error('artifact_delivery_timeout'));
+    }, deliveryTimeoutMs);
+
+    waiters.add(waiter);
+
+    return {
+      promise,
+      cancel() {
+        waiter.reject(new Error('artifact_wait_cancelled'));
+      }
+    };
+  }
+
   function observeLine({ agentId, line, sessionKey = null }) {
     if (!line || !line.trim()) return;
 
@@ -87,7 +167,8 @@ function createArtifactStreamRuntime({ logger = console } = {}) {
     if (data.type !== 'message') return;
 
     const message = data.message || data;
-    if (message.role !== 'assistant') return;
+    const role = message.role;
+    if (role !== 'assistant' && role !== 'user') return;
 
     const content = typeof message.content === 'string'
       ? message.content
@@ -100,6 +181,23 @@ function createArtifactStreamRuntime({ logger = console } = {}) {
       if (waiter.agentId !== agentId) continue;
       if (waiter.sessionKey && messageSessionKey && waiter.sessionKey !== messageSessionKey) continue;
       if (tsMs < waiter.startedAtMs) continue;
+
+      if (waiter.mode === 'delivery_then_artifact') {
+        if (waiter.deliveryAckTsMs === null) {
+          if (role !== 'user') continue;
+          if (!sourceTextMatchesCandidate(content, waiter.sourceMessage)) continue;
+          waiter.ackDelivery(tsMs);
+          continue;
+        }
+
+        if (role !== 'assistant') continue;
+        if (tsMs < waiter.deliveryAckTsMs) continue;
+        if (!hasArtifactTagForLevel(content, waiter.expectedLevel)) continue;
+        waiter.resolve(content);
+        continue;
+      }
+
+      if (role !== 'assistant') continue;
       if (!hasArtifactTagForLevel(content, waiter.expectedLevel)) continue;
       waiter.resolve(content);
     }
@@ -113,6 +211,7 @@ function createArtifactStreamRuntime({ logger = console } = {}) {
 
   return {
     waitForArtifact,
+    waitForDeliveredArtifact,
     observeLine,
     closeAll,
     getPendingCount() {
